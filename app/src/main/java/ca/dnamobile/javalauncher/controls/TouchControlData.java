@@ -53,6 +53,11 @@ public final class TouchControlData {
     public boolean toggle;
     public boolean visibleInGame = true;
     public boolean visibleInMenu = true;
+    /**
+     * When true, this control remains visible and clickable after the
+     * Show / hide touch controls action hides the normal on-screen buttons.
+     */
+    public boolean visibleWhenControlsHidden;
     public boolean joystickAbsolute;
     public boolean joystickForwardLock;
 
@@ -125,6 +130,7 @@ public final class TouchControlData {
         copy.toggle = toggle;
         copy.visibleInGame = visibleInGame;
         copy.visibleInMenu = visibleInMenu;
+        copy.visibleWhenControlsHidden = visibleWhenControlsHidden;
         copy.joystickAbsolute = joystickAbsolute;
         copy.joystickForwardLock = joystickForwardLock;
         copy.rawX = rawX;
@@ -157,6 +163,7 @@ public final class TouchControlData {
         json.put("toggle", toggle);
         json.put("visibleInGame", visibleInGame);
         json.put("visibleInMenu", visibleInMenu);
+        json.put("visibleWhenControlsHidden", visibleWhenControlsHidden);
         json.put("joystickAbsolute", joystickAbsolute);
         json.put("joystickForwardLock", joystickForwardLock);
         if (rawX != null) json.put("rawX", rawX);
@@ -187,6 +194,7 @@ public final class TouchControlData {
         data.toggle = json.optBoolean("toggle", json.optBoolean("isToggle", data.toggle));
         data.visibleInGame = json.optBoolean("visibleInGame", json.optBoolean("displayInGame", data.visibleInGame));
         data.visibleInMenu = json.optBoolean("visibleInMenu", json.optBoolean("displayInMenu", data.visibleInMenu));
+        data.visibleWhenControlsHidden = readVisibleWhenControlsHidden(json, data.action);
         data.joystickAbsolute = json.optBoolean("joystickAbsolute", json.optBoolean("absolute", data.joystickAbsolute));
         data.joystickForwardLock = json.optBoolean("joystickForwardLock", json.optBoolean("forwardLock", data.joystickForwardLock));
         data.rawX = optNullableString(json, "rawX", optNullableString(json, "dynamicX", null));
@@ -215,6 +223,7 @@ public final class TouchControlData {
         int[] importedKeys = readKeyCodes(json.optJSONArray("keycodes"), 32);
         int firstKey = firstUsableKey(importedKeys, 32);
         applyImportedKey(data, firstKey, importedKeys);
+        data.visibleWhenControlsHidden = readVisibleWhenControlsHidden(json, data.action);
         data.x = (float) json.optDouble("x", data.x);
         data.y = (float) json.optDouble("y", data.y);
         return data;
@@ -237,11 +246,39 @@ public final class TouchControlData {
         data.backgroundColor = json.optInt("bgColor", json.optInt("backgroundColor", data.backgroundColor));
         data.visibleInGame = json.optBoolean("displayInGame", true);
         data.visibleInMenu = json.optBoolean("displayInMenu", false);
+        data.visibleWhenControlsHidden = readVisibleWhenControlsHidden(json, data.action);
         data.rawX = optNullableString(json, "dynamicX", null);
         data.rawY = optNullableString(json, "dynamicY", null);
         data.joystickAbsolute = json.optBoolean("absolute", false);
         data.joystickForwardLock = json.optBoolean("forwardLock", false);
         return data;
+    }
+
+
+    private static boolean readVisibleWhenControlsHidden(@NonNull JSONObject json, @NonNull String action) {
+        boolean fallback = shouldStayVisibleWhenControlsHiddenByDefault(action);
+        return json.optBoolean(
+                "visibleWhenControlsHidden",
+                json.optBoolean(
+                        "keepVisibleWhenControlsHidden",
+                        json.optBoolean(
+                                "keepVisibleWhenHidden",
+                                json.optBoolean(
+                                        "displayWhenHidden",
+                                        json.optBoolean("alwaysVisible", fallback)
+                                )
+                        )
+                )
+        );
+    }
+
+    /**
+     * The control that hides the overlay must always survive its own hide action.
+     * Other controls, including the launcher GUI/menu button, only stay visible when
+     * the layout explicitly enables visibleWhenControlsHidden.
+     */
+    public static boolean shouldStayVisibleWhenControlsHiddenByDefault(@Nullable String action) {
+        return TouchControlActions.TOGGLE_CONTROLS.equals(action);
     }
 
     @NonNull

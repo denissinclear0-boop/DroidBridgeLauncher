@@ -1,15 +1,3 @@
-/*
- * Copyright (c) 2026 DNA Mobile Applications.
- * All rights reserved.
- *
- * This file is DroidBridge project code.
- * It is not part of Minecraft and does not grant rights to Minecraft,
- * Mojang, Microsoft, PojavLauncher, Zalith Launcher, or any third-party project.
- *
- * Files written entirely by DNA Mobile Applications are proprietary unless
- * a file header or separate license notice states otherwise.
- */
-
 package ca.dnamobile.javalauncher.storage;
 
 import android.content.Context;
@@ -25,7 +13,11 @@ import androidx.annotation.Nullable;
 import org.json.JSONArray;
 import org.json.JSONObject;
 
+import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -41,9 +33,12 @@ import ca.dnamobile.javalauncher.utils.path.PathManager;
  * Play-compliant scoped-storage rule:
  * - Default storage uses Android's app-specific external files directory.
  * - User-picked storage saves the SAF tree URI and shows the user's picked path.
- * - Minecraft/Forge/NeoForge still require normal java.io.File paths, so custom
- *   SAF locations use an app-private mirror for runtime/install work, then the
- *   mirror is synced to the picked SAF tree with ContentResolver/DocumentsContract.
+ * - Minecraft/Forge/NeoForge require normal java.io.File paths. When the picked
+ *   folder is writable as a normal File path, use it directly like Pojav/Glow Worm
+ *   style storage.
+ * - Only when Android blocks direct File access do we fall back to an app-private
+ *   mirror plus SAF sync. That fallback is slower and should not run for writable
+ *   real paths.
  * - Never rewrite a custom picked folder to Android/data as if it were the user's
  *   chosen folder.
  */
@@ -93,14 +88,29 @@ public final class StorageLocationStore {
                 File displayLauncherHome = resolveTreeUriToLauncherHome(appContext, treeUri);
                 File displayMinecraftHome = displayLauncherHome != null ? new File(displayLauncherHome, ".minecraft") : null;
 
-                // This is the real File path used by Minecraft/Forge/NeoForge. It is
-                // app-private and Play-safe. The user's chosen folder is synced by SAF.
-                File mirrorLauncherHome = getScopedMirrorLauncherHome(appContext, id);
-                File mirrorMinecraftHome = new File(mirrorLauncherHome, ".minecraft");
+                File launcherHome;
+                File minecraftHome;
+                boolean directFileAccess = displayLauncherHome != null
+                        && canUseLauncherHomeDirectly(displayLauncherHome);
+
+                if (directFileAccess) {
+                    // Pojav/Glow Worm style: use the selected folder itself as the
+                    // launcher home. No SAF mirror and no post-install file sync.
+                    launcherHome = displayLauncherHome;
+                    minecraftHome = new File(launcherHome, ".minecraft");
+                } else {
+                    // Compatibility fallback for providers/Android versions that do not
+                    // allow java.io.File writes to the selected tree path.
+                    launcherHome = getScopedMirrorLauncherHome(appContext, id);
+                    minecraftHome = new File(launcherHome, ".minecraft");
+                }
 
                 String summary;
                 if (displayMinecraftHome != null) {
                     summary = displayMinecraftHome.getAbsolutePath();
+                    if (!directFileAccess) {
+                        summary += "\nCompatibility mode: files are staged locally, then copied by Android scoped storage.";
+                    }
                 } else {
                     summary = uri;
                 }
@@ -110,8 +120,8 @@ public final class StorageLocationStore {
                         name.trim().isEmpty() ? buildDisplayName(appContext, treeUri, displayLauncherHome) : name,
                         summary,
                         uri,
-                        mirrorLauncherHome.getAbsolutePath(),
-                        mirrorMinecraftHome.getAbsolutePath(),
+                        launcherHome.getAbsolutePath(),
+                        minecraftHome.getAbsolutePath(),
                         false,
                         true
                 ));
@@ -155,14 +165,16 @@ public final class StorageLocationStore {
             if (id.equals(location.getId())) return location;
         }
 
-        File mirrorHome = getScopedMirrorLauncherHome(appContext, id);
+        File launcherHome = displayHome != null && canUseLauncherHomeDirectly(displayHome)
+                ? displayHome
+                : getScopedMirrorLauncherHome(appContext, id);
         return new StorageLocation(
                 id,
                 displayName,
                 displayHome != null ? new File(displayHome, ".minecraft").getAbsolutePath() : uriString,
                 uriString,
-                mirrorHome.getAbsolutePath(),
-                new File(mirrorHome, ".minecraft").getAbsolutePath(),
+                launcherHome.getAbsolutePath(),
+                new File(launcherHome, ".minecraft").getAbsolutePath(),
                 false,
                 true
         );
@@ -236,7 +248,11 @@ public final class StorageLocationStore {
     }
 
     public static boolean isSelectedScopedStorage(@NonNull Context context) {
-        return !getSelectedLocation(context).isDefaultLocation() && getSelectedTreeUri(context) != null;
+        Context appContext = context.getApplicationContext();
+        StorageLocation selected = getSelectedLocation(appContext);
+        return !selected.isDefaultLocation()
+                && getSelectedTreeUri(appContext) != null
+                && isMirrorBackedStorageLocation(appContext, selected);
     }
 
     /**
@@ -309,12 +325,18 @@ public final class StorageLocationStore {
         Context appContext = context.getApplicationContext();
         StorageLocation selected = getSelectedLocation(appContext);
         if (selected.isDefaultLocation()) return;
+        if (!isMirrorBackedStorageLocation(appContext, selected)) return;
         Uri treeUri = getSelectedTreeUri(appContext);
         if (treeUri == null) return;
-        File localLauncherHome = getSelectedLauncherHome(appContext);
-        SafMinecraftMirror.copyLocalLauncherHomeToTree(appContext, localLauncherHome, treeUri, progress);
+
+        File localRoot = getSelectedLocalRootForTree(appContext, treeUri);
+        SafMinecraftMirror.copyLocalLauncherHomeToTree(appContext, localRoot, treeUri, progress);
     }
 
+    /**
+     * Full restore used only when runtime files are actually needed, such as before
+     * launch. Do not call this from the storage picker just to populate the UI.
+     */
     public static void syncSelectedTreeToMirror(
             @NonNull Context context,
             @Nullable SafMinecraftMirror.Progress progress
@@ -322,10 +344,169 @@ public final class StorageLocationStore {
         Context appContext = context.getApplicationContext();
         StorageLocation selected = getSelectedLocation(appContext);
         if (selected.isDefaultLocation()) return;
+        if (!isMirrorBackedStorageLocation(appContext, selected)) return;
         Uri treeUri = getSelectedTreeUri(appContext);
         if (treeUri == null) return;
-        File localLauncherHome = getSelectedLauncherHome(appContext);
-        SafMinecraftMirror.copyTreeToLocalLauncherHome(appContext, treeUri, localLauncherHome, progress);
+
+        File localRoot = getSelectedLocalRootForTree(appContext, treeUri);
+        SafMinecraftMirror.copyTreeToLocalLauncherHome(appContext, treeUri, localRoot, progress);
+    }
+
+    /**
+     * Tiny restore used by the storage picker/main adapter. It copies only instance
+     * metadata, icons, options.txt, and version JSON files. It intentionally skips
+     * assets, libraries, saves, mods, resource packs, shader packs, logs, screenshots,
+     * jars, and other large runtime data.
+     */
+    public static void syncSelectedTreeMetadataToMirror(
+            @NonNull Context context,
+            @Nullable SafMinecraftMirror.Progress progress
+    ) throws Exception {
+        Context appContext = context.getApplicationContext();
+        StorageLocation selected = getSelectedLocation(appContext);
+        if (selected.isDefaultLocation()) return;
+        if (!isMirrorBackedStorageLocation(appContext, selected)) return;
+        Uri treeUri = getSelectedTreeUri(appContext);
+        if (treeUri == null) return;
+
+        File localRoot = getSelectedLocalRootForTree(appContext, treeUri);
+        SafMinecraftMirror.copyTreeMetadataToLocalLauncherHome(appContext, treeUri, localRoot, progress);
+    }
+
+    /**
+     * Restores one already-known local mirror path from the picked SAF tree.
+     * This is useful when the user opens one instance details screen: the adapter
+     * stays fast, but that one instance folder can be hydrated on demand.
+     */
+    public static void syncSelectedLocalPathFromTree(
+            @NonNull Context context,
+            @NonNull File localPath,
+            @Nullable SafMinecraftMirror.Progress progress
+    ) throws Exception {
+        Context appContext = context.getApplicationContext();
+        StorageLocation selected = getSelectedLocation(appContext);
+        if (selected.isDefaultLocation()) return;
+        if (!isMirrorBackedStorageLocation(appContext, selected)) return;
+        Uri treeUri = getSelectedTreeUri(appContext);
+        if (treeUri == null) return;
+
+        File localRoot = getSelectedLocalRootForTree(appContext, treeUri).getCanonicalFile();
+        File target = localPath.getCanonicalFile();
+        if (!target.equals(localRoot) && !isChildOf(localRoot, target)) {
+            Logging.i(TAG, "Skipping scoped relative restore outside selected mirror: " + target.getAbsolutePath());
+            return;
+        }
+
+        String relative = relativePath(localRoot, target);
+        SafMinecraftMirror.copyRelativePathToLocalLauncherHome(appContext, treeUri, localRoot, relative, progress);
+    }
+
+    public static boolean needsSelectedTreeRestoreForLaunch(
+            @NonNull Context context,
+            @Nullable File instanceRoot,
+            @Nullable String versionId
+    ) {
+        Context appContext = context.getApplicationContext();
+        if (!isSelectedScopedStorage(appContext)) return false;
+
+        try {
+            if (instanceRoot != null && !new File(instanceRoot, "instance.json").isFile()) {
+                return true;
+            }
+
+            File minecraftHome = getSelectedMinecraftHome(appContext);
+            String cleanVersionId = versionId == null ? "" : versionId.trim();
+            if (!cleanVersionId.isEmpty()
+                    && !isVersionInheritanceChainReadyForLaunch(minecraftHome, cleanVersionId, new HashSet<>())) {
+                return true;
+            }
+
+            // Assets and libraries are now under .minecraft. If these are absent,
+            // the app-private mirror is probably metadata-only or was lost after
+            // uninstall/reinstall, so restore before starting Minecraft.
+            if (!new File(minecraftHome, "assets").isDirectory()) return true;
+            if (!new File(minecraftHome, "libraries").isDirectory()) return true;
+        } catch (Throwable throwable) {
+            Logging.i(TAG, "Unable to check scoped mirror launch readiness: " + throwable.getMessage());
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * Metadata-only restores can make a Fabric/Forge/NeoForge child profile visible
+     * in the adapter while the inherited vanilla parent profile/JAR is still absent.
+     * The launcher must restore the full scoped tree before launch if any inherited
+     * parent in the chain is missing.
+     */
+    private static boolean isVersionInheritanceChainReadyForLaunch(
+            @NonNull File minecraftHome,
+            @NonNull String versionId,
+            @NonNull Set<String> visited
+    ) throws Exception {
+        String cleanVersionId = versionId.trim();
+        if (cleanVersionId.isEmpty()) return true;
+        if (!visited.add(cleanVersionId)) {
+            Logging.i(TAG, "Circular version inheritance detected while checking scoped mirror: " + cleanVersionId);
+            return false;
+        }
+
+        File versionDirectory = new File(new File(minecraftHome, "versions"), cleanVersionId);
+        File versionJsonFile = new File(versionDirectory, cleanVersionId + ".json");
+        if (!versionJsonFile.isFile()) {
+            Logging.i(TAG, "Scoped mirror is missing version JSON before launch: " + versionJsonFile.getAbsolutePath());
+            return false;
+        }
+
+        JSONObject versionJson = new JSONObject(readString(versionJsonFile));
+        String parentVersionId = versionJson.optString("inheritsFrom", "").trim();
+        if (!parentVersionId.isEmpty()) {
+            return isVersionInheritanceChainReadyForLaunch(minecraftHome, parentVersionId, visited);
+        }
+
+        File clientJarFile = new File(versionDirectory, cleanVersionId + ".jar");
+        if (!clientJarFile.isFile()) {
+            Logging.i(TAG, "Scoped mirror is missing standalone client jar before launch: " + clientJarFile.getAbsolutePath());
+            return false;
+        }
+
+        return true;
+    }
+
+    @NonNull
+    private static String readString(@NonNull File file) throws Exception {
+        try (FileInputStream input = new FileInputStream(file);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[16 * 1024];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+            return output.toString(StandardCharsets.UTF_8.name());
+        }
+    }
+
+    @NonNull
+    private static File getSelectedLocalRootForTree(@NonNull Context context, @NonNull Uri treeUri) {
+        File launcherHome = getSelectedLauncherHome(context);
+        return isMinecraftTreeUri(context, treeUri) ? new File(launcherHome, ".minecraft") : launcherHome;
+    }
+
+    private static boolean isMinecraftTreeUri(@NonNull Context context, @NonNull Uri treeUri) {
+        File selectedDirectory = resolveTreeUriToFile(context, treeUri);
+        if (selectedDirectory != null && ".minecraft".equals(selectedDirectory.getName())) {
+            return true;
+        }
+
+        try {
+            String documentId = DocumentsContract.getTreeDocumentId(treeUri);
+            if (documentId == null) return false;
+            documentId = documentId.replace('\\', '/');
+            return documentId.equals(".minecraft") || documentId.endsWith("/.minecraft") || documentId.endsWith(":.minecraft");
+        } catch (Throwable ignored) {
+            return false;
+        }
     }
 
 
@@ -344,18 +525,24 @@ public final class StorageLocationStore {
 
         for (StorageLocation location : getLocations(appContext)) {
             if (location.isDefaultLocation()) continue;
+            if (!isMirrorBackedStorageLocation(appContext, location)) continue;
 
             String uriString = location.getUriString();
             String launcherHomePath = location.getLauncherHomePath();
             if (uriString == null || uriString.trim().isEmpty()) continue;
             if (launcherHomePath == null || launcherHomePath.trim().isEmpty()) continue;
 
+            Uri treeUri = Uri.parse(uriString.trim());
             File launcherHome = new File(launcherHomePath.trim()).getCanonicalFile();
-            if (!target.equals(launcherHome) && !isChildOf(launcherHome, target)) {
+            File localRootForTree = isMinecraftTreeUri(appContext, treeUri)
+                    ? new File(launcherHome, ".minecraft").getCanonicalFile()
+                    : launcherHome;
+
+            if (!target.equals(localRootForTree) && !isChildOf(localRootForTree, target)) {
                 continue;
             }
 
-            String relative = relativePath(launcherHome, target);
+            String relative = relativePath(localRootForTree, target);
             if (relative.isEmpty()) {
                 Logging.i(TAG, "Refusing to delete scoped storage root for local path: " + target.getAbsolutePath());
                 return false;
@@ -363,7 +550,7 @@ public final class StorageLocationStore {
 
             return SafMinecraftMirror.deleteRelativePathFromTree(
                     appContext,
-                    Uri.parse(uriString.trim()),
+                    treeUri,
                     relative
             );
         }
@@ -416,6 +603,47 @@ public final class StorageLocationStore {
             if (parent != null) return parent;
         }
         return selectedDirectory;
+    }
+
+    private static boolean canUseLauncherHomeDirectly(@NonNull File launcherHome) {
+        try {
+            if (!launcherHome.isDirectory()) return false;
+
+            File minecraftHome = new File(launcherHome, ".minecraft");
+            if (!minecraftHome.exists() && !minecraftHome.mkdirs() && !minecraftHome.isDirectory()) {
+                return false;
+            }
+
+            File testFile = new File(minecraftHome, ".java_launcher_write_test");
+            try (FileOutputStream output = new FileOutputStream(testFile, false)) {
+                output.write('J');
+            }
+
+            if (testFile.exists() && !testFile.delete()) {
+                Logging.i(TAG, "Unable to delete direct storage write test: " + testFile.getAbsolutePath());
+            }
+            return true;
+        } catch (Throwable throwable) {
+            Logging.i(TAG, "Selected folder is not writable through File API, using SAF mirror fallback: "
+                    + launcherHome.getAbsolutePath() + " because " + throwable.getMessage());
+            return false;
+        }
+    }
+
+    private static boolean isMirrorBackedStorageLocation(
+            @NonNull Context context,
+            @NonNull StorageLocation location
+    ) {
+        String launcherHomePath = location.getLauncherHomePath();
+        if (launcherHomePath == null || launcherHomePath.trim().isEmpty()) return false;
+
+        try {
+            File mirrorRoot = new File(context.getApplicationContext().getFilesDir(), "scoped_storage_mirrors").getCanonicalFile();
+            File launcherHome = new File(launcherHomePath.trim()).getCanonicalFile();
+            return launcherHome.equals(mirrorRoot) || isChildOf(mirrorRoot, launcherHome);
+        } catch (Throwable throwable) {
+            return false;
+        }
     }
 
     @NonNull

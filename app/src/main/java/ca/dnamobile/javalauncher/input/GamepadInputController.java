@@ -23,6 +23,8 @@ import androidx.annotation.Nullable;
 
 import ca.dnamobile.javalauncher.feature.log.Logging;
 
+import java.util.EnumMap;
+
 /**
  * Built-in Android controller support.
  *
@@ -44,6 +46,12 @@ public final class GamepadInputController {
     private static final float BASE_DPAD_CURSOR_STEP = 14f;
     private static final float CURSOR_ACTION_BASE_STEP = 72f;
 
+    // When Minecraft closes a GUI/inventory and re-grabs the pointer, Android can
+    // still report the stick value that was being used to move the menu cursor.
+    // Block camera movement briefly and require the right stick to return neutral
+    // so the old menu-cursor value cannot become a sudden camera snap.
+    private static final long GAME_REGRAB_CAMERA_SUPPRESS_NANOS = 650_000_000L;
+
     private static final int DIRECTION_NONE = -1;
     private static final int DIRECTION_EAST = 0;
     private static final int DIRECTION_NORTH_EAST = 1;
@@ -61,6 +69,7 @@ public final class GamepadInputController {
     private final Choreographer choreographer = Choreographer.getInstance();
     private final GamepadMappingStore mappingStore;
     private final MappingRequestListener mappingRequestListener;
+    private final EnumMap<GamepadButton, ActiveMappedAction> activeButtonActions = new EnumMap<>(GamepadButton.class);
 
     private boolean removed;
     private long lastFrameNanos = System.nanoTime();
@@ -80,6 +89,11 @@ public final class GamepadInputController {
     private boolean hatRight;
     private boolean leftTriggerDown;
     private boolean rightTriggerDown;
+
+    // I love cheese
+    private boolean lastGameMode;
+    private boolean requireRightStickNeutralBeforeCamera;
+    private long suppressCameraUntilNanos;
 
     private final Choreographer.FrameCallback frameCallback = new Choreographer.FrameCallback() {
         @Override
@@ -108,14 +122,14 @@ public final class GamepadInputController {
                 Math.max(1, org.lwjgl.glfw.CallbackBridge.windowHeight) / 2f
         );
 
+        lastGameMode = isGameMode();
         choreographer.postFrameCallback(frameCallback);
     }
 
     public void removeSelf() {
         removed = true;
         releaseDirection();
-        sendMappedButton(GamepadButton.BUTTON_L2, false, activeDevice);
-        sendMappedButton(GamepadButton.BUTTON_R2, false, activeDevice);
+        releaseAllMappedButtons();
     }
 
     public boolean handleKeyEvent(@NonNull KeyEvent event) {
@@ -242,9 +256,16 @@ public final class GamepadInputController {
         if (deltaScale <= 0f || deltaScale > 4f) deltaScale = 1f;
 
         boolean gameMode = isGameMode();
+        if (gameMode != lastGameMode) {
+            handleInputModeChanged(gameMode, frameTimeNanos);
+            lastGameMode = gameMode;
+            // Do not let the frame that changed modes consume stale delta/axis data.
+            lastFrameNanos = frameTimeNanos;
+            return;
+        }
 
         if (gameMode) {
-            tickCamera(deltaScale);
+            tickCamera(deltaScale, frameTimeNanos);
         } else {
             tickMenuCursor(deltaScale);
         }
@@ -252,7 +273,41 @@ public final class GamepadInputController {
         lastFrameNanos = frameTimeNanos;
     }
 
-    private void tickCamera(float deltaScale) {
+    private void handleInputModeChanged(boolean gameMode, long frameTimeNanos) {
+        releaseDirection();
+
+        if (gameMode) {
+            blockCameraAfterMenuClose(frameTimeNanos, "Minecraft input re-grabbed");
+        } else {
+            requireRightStickNeutralBeforeCamera = false;
+            suppressCameraUntilNanos = 0L;
+        }
+    }
+
+    private void prepareForLikelyMenuCloseFromController(@NonNull GamepadButton button) {
+        blockCameraAfterMenuClose(System.nanoTime(), "Menu close requested by " + button);
+    }
+
+    private void blockCameraAfterMenuClose(long nowNanos, @NonNull String reason) {
+        clearStickAxes();
+        releaseDirection();
+        requireRightStickNeutralBeforeCamera = true;
+        suppressCameraUntilNanos = Math.max(
+                suppressCameraUntilNanos,
+                nowNanos + GAME_REGRAB_CAMERA_SUPPRESS_NANOS
+        );
+        Logging.i(TAG, reason + "; blocking controller camera until right stick returns neutral");
+    }
+
+    private void clearStickAxes() {
+        leftX = 0f;
+        leftY = 0f;
+        rightX = 0f;
+        rightY = 0f;
+    }
+
+    private void tickCamera(float deltaScale, long frameTimeNanos) {
+        if (shouldBlockCameraInput(frameTimeNanos)) return;
         if (rightX == 0f && rightY == 0f) return;
 
         float magnitude = Math.min(1f, (float) Math.sqrt(rightX * rightX + rightY * rightY));
@@ -267,6 +322,16 @@ public final class GamepadInputController {
         org.lwjgl.glfw.CallbackBridge.mouseX += deltaX;
         org.lwjgl.glfw.CallbackBridge.mouseY += deltaY;
         org.lwjgl.glfw.CallbackBridge.sendCursorPos(org.lwjgl.glfw.CallbackBridge.mouseX, org.lwjgl.glfw.CallbackBridge.mouseY);
+    }
+
+    private boolean shouldBlockCameraInput(long frameTimeNanos) {
+        boolean rightStickNeutral = rightX == 0f && rightY == 0f;
+
+        if (rightStickNeutral && frameTimeNanos >= suppressCameraUntilNanos) {
+            requireRightStickNeutralBeforeCamera = false;
+        }
+
+        return frameTimeNanos < suppressCameraUntilNanos || requireRightStickNeutralBeforeCamera;
     }
 
     private void tickMenuCursor(float deltaScale) {
@@ -392,6 +457,38 @@ public final class GamepadInputController {
             boolean isDown,
             @Nullable InputDevice device
     ) {
+        ActiveMappedAction mapped;
+
+        if (isDown) {
+            mapped = resolveMappedAction(button, device);
+            activeButtonActions.put(button, mapped);
+        } else {
+            mapped = activeButtonActions.remove(button);
+            if (mapped == null) {
+                // Fallback for devices that send an UP without the matching DOWN.
+                mapped = resolveMappedAction(button, device);
+            }
+        }
+
+        if (isDown && !mapped.gameMode && mapped.action == GamepadAction.ESCAPE) {
+            prepareForLikelyMenuCloseFromController(button);
+        }
+
+        Logging.i(TAG, "Button=" + button + ", down=" + isDown
+                + ", gameMode=" + mapped.gameMode
+                + ", profile=" + mappingStore.profileKeyForDevice(device)
+                + ", action=" + mapped.action.name()
+                + ", cursor=" + org.lwjgl.glfw.CallbackBridge.mouseX + ","
+                + org.lwjgl.glfw.CallbackBridge.mouseY);
+
+        mapped.action.perform(isDown, mapped.pulseMenuMouseClick);
+    }
+
+    @NonNull
+    private ActiveMappedAction resolveMappedAction(
+            @NonNull GamepadButton button,
+            @Nullable InputDevice device
+    ) {
         boolean gameMode = isGameMode();
         GamepadAction action = mappingStore.getButtonAction(button, gameMode, device);
 
@@ -405,15 +502,18 @@ public final class GamepadInputController {
             action = GamepadAction.MOUSE_LEFT;
         }
 
-        Logging.i(TAG, "Button=" + button + ", down=" + isDown
-                + ", gameMode=" + gameMode
-                + ", profile=" + mappingStore.profileKeyForDevice(device)
-                + ", action=" + action.name()
-                + ", cursor=" + org.lwjgl.glfw.CallbackBridge.mouseX + ","
-                + org.lwjgl.glfw.CallbackBridge.mouseY);
-
         boolean pulseMenuMouseClick = !gameMode && action.isMouseButton();
-        action.perform(isDown, pulseMenuMouseClick);
+        return new ActiveMappedAction(action, pulseMenuMouseClick, gameMode);
+    }
+
+    private void releaseAllMappedButtons() {
+        if (activeButtonActions.isEmpty()) return;
+        for (ActiveMappedAction mapped : activeButtonActions.values()) {
+            if (mapped != null) {
+                mapped.action.perform(false, mapped.pulseMenuMouseClick);
+            }
+        }
+        activeButtonActions.clear();
     }
 
     private void updateHatButton(
@@ -456,6 +556,22 @@ public final class GamepadInputController {
             if (rightTriggerDown == isDown) return;
             rightTriggerDown = isDown;
             sendMappedButton(GamepadButton.BUTTON_R2, isDown, device);
+        }
+    }
+
+    private static final class ActiveMappedAction {
+        @NonNull final GamepadAction action;
+        final boolean pulseMenuMouseClick;
+        final boolean gameMode;
+
+        ActiveMappedAction(
+                @NonNull GamepadAction action,
+                boolean pulseMenuMouseClick,
+                boolean gameMode
+        ) {
+            this.action = action;
+            this.pulseMenuMouseClick = pulseMenuMouseClick;
+            this.gameMode = gameMode;
         }
     }
 }

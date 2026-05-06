@@ -47,47 +47,55 @@ public final class VulkanModLwjglMitigation {
     public static void prepare(@Nullable File gameDir) {
         if (gameDir == null) return;
 
-        List<File> modsDirs = getCandidateModsDirs(gameDir);
-        boolean foundAnyJar = false;
+        appendBlankLogLine();
+        appendLog("VulkanMod mitigation: about to run on " + gameDir.getAbsolutePath());
 
-        for (File modsDir : modsDirs) {
-            appendLog("VulkanMod mitigation: scanning " + modsDir.getAbsolutePath() + " exists=" + modsDir.exists());
+        try {
+            List<File> modsDirs = getCandidateModsDirs(gameDir);
+            boolean foundAnyJar = false;
 
-            File[] mods = modsDir.listFiles(file -> file.isFile() && file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".jar"));
-            if (mods == null || mods.length == 0) continue;
+            for (File modsDir : modsDirs) {
+                appendLog("VulkanMod mitigation: scanning " + modsDir.getAbsolutePath() + " exists=" + modsDir.exists());
 
-            for (File modJar : mods) {
-                String lowerName = modJar.getName().toLowerCase(java.util.Locale.ROOT);
-                if (!lowerName.contains("vulkanmod")) continue;
+                File[] mods = modsDir.listFiles(file -> file.isFile() && file.getName().toLowerCase(java.util.Locale.ROOT).endsWith(".jar"));
+                if (mods == null || mods.length == 0) continue;
 
-                foundAnyJar = true;
-                appendLog("VulkanMod mitigation: found mod jar " + modJar.getAbsolutePath());
+                for (File modJar : mods) {
+                    String lowerName = modJar.getName().toLowerCase(java.util.Locale.ROOT);
+                    if (!lowerName.contains("vulkanmod")) continue;
 
-                try {
-                    if (!containsBundledLwjglVulkan(modJar)) {
-                        appendLog("VulkanMod mitigation: no bundled lwjgl-vulkan nested jar in " + modJar.getName());
-                        Log.i(TAG, "VulkanMod found but no bundled lwjgl-vulkan nested jar was detected: " + modJar.getName());
-                        continue;
+                    foundAnyJar = true;
+                    appendLog("VulkanMod mitigation: found mod jar " + modJar.getAbsolutePath());
+
+                    try {
+                        if (!containsBundledLwjglVulkan(modJar)) {
+                            appendLog("VulkanMod mitigation: no bundled lwjgl-vulkan nested jar in " + modJar.getName());
+                            Log.i(TAG, "VulkanMod found but no bundled lwjgl-vulkan nested jar was detected: " + modJar.getName());
+                            continue;
+                        }
+
+                        if (isAlreadyPatched(modJar)) {
+                            appendLog("VulkanMod mitigation: already patched " + modJar.getAbsolutePath());
+                            Log.i(TAG, "VulkanMod already patched: " + modJar.getName());
+                            continue;
+                        }
+
+                        patchVulkanModJar(modJar);
+                        appendLog("VulkanMod mitigation: patched successfully " + modJar.getAbsolutePath());
+                        Log.i(TAG, "Patched VulkanMod to strip bundled lwjgl-vulkan: " + modJar.getAbsolutePath());
+                    } catch (Throwable throwable) {
+                        appendLog("VulkanMod mitigation: failed for " + modJar.getAbsolutePath() + ": " + throwable);
+                        Log.e(TAG, "Failed to patch VulkanMod jar: " + modJar.getAbsolutePath(), throwable);
                     }
-
-                    if (isAlreadyPatched(modJar)) {
-                        appendLog("VulkanMod mitigation: already patched " + modJar.getAbsolutePath());
-                        Log.i(TAG, "VulkanMod already patched: " + modJar.getName());
-                        continue;
-                    }
-
-                    patchVulkanModJar(modJar);
-                    appendLog("VulkanMod mitigation: patched successfully " + modJar.getAbsolutePath());
-                    Log.i(TAG, "Patched VulkanMod to strip bundled lwjgl-vulkan: " + modJar.getAbsolutePath());
-                } catch (Throwable throwable) {
-                    appendLog("VulkanMod mitigation: failed for " + modJar.getAbsolutePath() + ": " + throwable);
-                    Log.e(TAG, "Failed to patch VulkanMod jar: " + modJar.getAbsolutePath(), throwable);
                 }
             }
-        }
 
-        if (!foundAnyJar) {
-            appendLog("VulkanMod mitigation: no VulkanMod jar found in candidate mod directories");
+            if (!foundAnyJar) {
+                appendLog("VulkanMod mitigation: no VulkanMod jar found in candidate mod directories");
+            }
+        } finally {
+            appendLog("VulkanMod mitigation: finished");
+            appendBlankLogLine();
         }
     }
 
@@ -286,9 +294,28 @@ public final class VulkanModLwjglMitigation {
 
     private static void appendLog(@NonNull String message) {
         try {
-            Logger.appendToLog(message.endsWith("\n") ? message : message + "\n");
+            Logger.appendToLog(stripTrailingLineBreaks(message));
         } catch (Throwable ignored) {
             Logging.i(TAG, message);
         }
+    }
+
+    private static void appendBlankLogLine() {
+        try {
+            Logger.appendToLog("");
+        } catch (Throwable ignored) {
+            Logging.i(TAG, "");
+        }
+    }
+
+    @NonNull
+    private static String stripTrailingLineBreaks(@NonNull String message) {
+        int end = message.length();
+        while (end > 0) {
+            char c = message.charAt(end - 1);
+            if (c != '\n' && c != '\r') break;
+            end--;
+        }
+        return end == message.length() ? message : message.substring(0, end);
     }
 }

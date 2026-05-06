@@ -167,11 +167,9 @@ public final class ControlifySDL {
 
     private static boolean containsControlifyJar(@Nullable File modsDir) {
         if (modsDir == null || !modsDir.isDirectory()) {
-            append("ControlifySDL: scan " + (modsDir == null ? "<null>" : modsDir.getAbsolutePath()) + " exists=false");
             return false;
         }
 
-        append("ControlifySDL: scan " + modsDir.getAbsolutePath() + " exists=true");
         File[] files = modsDir.listFiles();
         if (files == null) return false;
 
@@ -187,8 +185,19 @@ public final class ControlifySDL {
 
     private static void append(@NonNull String message) {
         try {
-            Logger.appendToLog(message.endsWith("\n") ? message : message + "\n");
+            Logger.appendToLog(stripTrailingLineBreaks(message));
         } catch (Throwable ignored) {
         }
+    }
+
+    @NonNull
+    private static String stripTrailingLineBreaks(@NonNull String message) {
+        int end = message.length();
+        while (end > 0) {
+            char c = message.charAt(end - 1);
+            if (c != '\n' && c != '\r') break;
+            end--;
+        }
+        return end == message.length() ? message : message.substring(0, end);
     }
 }

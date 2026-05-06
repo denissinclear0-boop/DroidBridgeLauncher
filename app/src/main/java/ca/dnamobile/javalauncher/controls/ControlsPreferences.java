@@ -31,6 +31,8 @@ public final class ControlsPreferences {
     private static final String KEY_SNAP_CONTROLS = "snap_controls";
     private static final String KEY_SIZE_PREVIEW_PERCENT = "size_preview_percent";
     private static final String KEY_VIRTUAL_MOUSE_ENABLED = "virtual_mouse_enabled";
+    private static final String KEY_MINECRAFT_TOUCH_GESTURES = "minecraft_touch_gestures";
+    private static final String KEY_DOUBLE_TAP_TO_DROP = "double_tap_to_drop";
 
     private static final String KEY_HOTBAR_HITBOX_DEBUG = "hotbar_hitbox_debug";
     private static final String KEY_HOTBAR_GUI_SCALE_OVERRIDE = "hotbar_gui_scale_override";
@@ -116,6 +118,32 @@ public final class ControlsPreferences {
 
     public static void setVirtualMouseEnabled(@NonNull Context context, boolean enabled) {
         prefs(context).edit().putBoolean(KEY_VIRTUAL_MOUSE_ENABLED, enabled).apply();
+    }
+
+    /**
+     * Launcher-side touchscreen gestures while Minecraft has grabbed the mouse.
+     * When disabled, empty-space touch still moves the camera, but quick-tap and
+     * long-press punching/attacking are blocked. On-screen buttons still work.
+     */
+    public static boolean isMinecraftTouchGesturesEnabled(@NonNull Context context) {
+        return prefs(context).getBoolean(KEY_MINECRAFT_TOUCH_GESTURES, true);
+    }
+
+    public static void setMinecraftTouchGesturesEnabled(@NonNull Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_MINECRAFT_TOUCH_GESTURES, enabled).apply();
+    }
+
+    /**
+     * Optional helper gesture: double-tapping the empty in-game look area sends Q
+     * to drop the currently selected item. Kept off by default so normal tapping
+     * cannot accidentally drop items.
+     */
+    public static boolean isDoubleTapToDropEnabled(@NonNull Context context) {
+        return prefs(context).getBoolean(KEY_DOUBLE_TAP_TO_DROP, false);
+    }
+
+    public static void setDoubleTapToDropEnabled(@NonNull Context context, boolean enabled) {
+        prefs(context).edit().putBoolean(KEY_DOUBLE_TAP_TO_DROP, enabled).apply();
     }
 
     public static boolean isHotbarHitboxDebugEnabled(@NonNull Context context) {

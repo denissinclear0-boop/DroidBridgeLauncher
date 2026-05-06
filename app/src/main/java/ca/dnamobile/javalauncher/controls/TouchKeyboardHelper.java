@@ -18,6 +18,7 @@ import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.text.Editable;
 import android.text.InputType;
 import android.text.TextWatcher;
@@ -26,6 +27,8 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.inputmethod.EditorInfo;
+import android.view.inputmethod.InputConnection;
+import android.view.inputmethod.InputConnectionWrapper;
 import android.view.inputmethod.InputMethodManager;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -53,13 +56,37 @@ final class TouchKeyboardHelper {
     private static final int GLFW_PRESS_KEY_ENTER = 257;
     private static final int GLFW_PRESS_KEY_BACKSPACE = 259;
     private static final int GLFW_PRESS_KEY_ESCAPE = 256;
+    private static final int DEFAULT_CLEAR_BACKSPACES = 64;
+    private static final long CHAT_KEYBOARD_MODE_GRACE_MS = 10_000L;
 
     @Nullable private static KeyboardInputOverlay activeOverlay;
+    private static long lastChatKeyPressUptimeMs;
 
     private TouchKeyboardHelper() {
     }
 
     static void showKeyboard(@NonNull View source) {
+        // Capture the mode at the moment the keyboard is opened.
+        // In the normal game view, Minecraft is grabbing input, so Done/Enter
+        // should submit chat. If the player pressed the launcher Chat/T key and
+        // then opened the Android keyboard, Minecraft may already have released
+        // grab for the chat screen, so keep a short chat grace window too.
+        // Menu text fields such as Create World name are not grabbed and do not
+        // follow a launcher Chat/T press, so Done only closes the IME there.
+        showKeyboard(source, shouldSubmitWithEnterByDefault());
+    }
+
+    static void markChatKeyPressed() {
+        lastChatKeyPressUptimeMs = SystemClock.uptimeMillis();
+    }
+
+    private static boolean shouldSubmitWithEnterByDefault() {
+        if (CallbackBridge.isGrabbing()) return true;
+        long ageMs = SystemClock.uptimeMillis() - lastChatKeyPressUptimeMs;
+        return ageMs >= 0L && ageMs <= CHAT_KEYBOARD_MODE_GRACE_MS;
+    }
+
+    static void showKeyboard(@NonNull View source, boolean submitSendsEnter) {
         hideKeyboard(false);
 
         View root = source.getRootView();
@@ -76,7 +103,7 @@ final class TouchKeyboardHelper {
             return;
         }
 
-        KeyboardInputOverlay overlay = new KeyboardInputOverlay(host.getContext());
+        KeyboardInputOverlay overlay = new KeyboardInputOverlay(host.getContext(), submitSendsEnter);
         activeOverlay = overlay;
         host.addView(overlay, new FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
@@ -107,17 +134,89 @@ final class TouchKeyboardHelper {
         return null;
     }
 
+    /**
+     * A normal EditText does not always report Backspace when it is already empty.
+     * That breaks Minecraft fields that already contain text before this overlay is
+     * opened, because Android thinks the overlay has nothing to delete while
+     * Minecraft still has text like "New World".
+     */
+    private static final class MinecraftKeyboardEditText extends EditText {
+        MinecraftKeyboardEditText(@NonNull Context context) {
+            super(context);
+        }
+
+        @Nullable
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            InputConnection base = super.onCreateInputConnection(outAttrs);
+            if (base == null) return null;
+
+            return new InputConnectionWrapper(base, true) {
+                @Override
+                public boolean deleteSurroundingText(int beforeLength, int afterLength) {
+                    if (shouldForwardEmptyBackspace(beforeLength, afterLength)) {
+                        sendRepeatedBackspace(Math.max(1, beforeLength));
+                        return true;
+                    }
+                    return super.deleteSurroundingText(beforeLength, afterLength);
+                }
+
+                @Override
+                public boolean deleteSurroundingTextInCodePoints(int beforeLength, int afterLength) {
+                    if (shouldForwardEmptyBackspace(beforeLength, afterLength)) {
+                        sendRepeatedBackspace(Math.max(1, beforeLength));
+                        return true;
+                    }
+                    return super.deleteSurroundingTextInCodePoints(beforeLength, afterLength);
+                }
+
+                @Override
+                public boolean sendKeyEvent(KeyEvent event) {
+                    if (event != null
+                            && event.getAction() == KeyEvent.ACTION_DOWN
+                            && event.getRepeatCount() == 0
+                            && event.getKeyCode() == KeyEvent.KEYCODE_DEL
+                            && isOverlayTextEmpty()) {
+                        sendKeyTap(GLFW_PRESS_KEY_BACKSPACE);
+                        return true;
+                    }
+                    return super.sendKeyEvent(event);
+                }
+            };
+        }
+
+        @Override
+        public boolean onKeyDown(int keyCode, KeyEvent event) {
+            if (keyCode == KeyEvent.KEYCODE_DEL && isOverlayTextEmpty()) {
+                sendKeyTap(GLFW_PRESS_KEY_BACKSPACE);
+                return true;
+            }
+            return super.onKeyDown(keyCode, event);
+        }
+
+        private boolean shouldForwardEmptyBackspace(int beforeLength, int afterLength) {
+            return beforeLength > 0 && afterLength == 0 && isOverlayTextEmpty();
+        }
+
+        private boolean isOverlayTextEmpty() {
+            Editable editable = getText();
+            return editable == null || editable.length() == 0;
+        }
+    }
+
     private static final class KeyboardInputOverlay extends FrameLayout {
         private final Handler handler = new Handler(Looper.getMainLooper());
         private final LinearLayout panel;
         private final EditText input;
         private final TextView preview;
+        private final boolean submitSendsEnter;
         private String lastText = "";
         private boolean closing;
         private boolean internalChange;
 
-        KeyboardInputOverlay(@NonNull Context context) {
+        KeyboardInputOverlay(@NonNull Context context, boolean submitSendsEnter) {
             super(context);
+            this.submitSendsEnter = submitSendsEnter;
             setClickable(false);
             setFocusable(false);
             setFocusableInTouchMode(false);
@@ -154,10 +253,10 @@ final class TouchKeyboardHelper {
                     ViewGroup.LayoutParams.WRAP_CONTENT
             ));
 
-            input = new EditText(context);
-            input.setSingleLine(false);
+            input = new MinecraftKeyboardEditText(context);
+            input.setSingleLine(true);
             input.setMinLines(1);
-            input.setMaxLines(2);
+            input.setMaxLines(1);
             input.setTextColor(Color.WHITE);
             input.setHintTextColor(0xAAFFFFFF);
             input.setTextSize(16f);
@@ -165,9 +264,9 @@ final class TouchKeyboardHelper {
             input.setSelectAllOnFocus(false);
             input.setInputType(InputType.TYPE_CLASS_TEXT
                     | InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-                    | InputType.TYPE_TEXT_FLAG_MULTI_LINE
                     | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-            input.setImeOptions(EditorInfo.IME_ACTION_DONE | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+            input.setImeOptions((submitSendsEnter ? EditorInfo.IME_ACTION_SEND : EditorInfo.IME_ACTION_DONE)
+                    | EditorInfo.IME_FLAG_NO_EXTRACT_UI);
             input.setBackgroundColor(0x22000000);
             input.setPadding(dp(8f), dp(6f), dp(8f), dp(6f));
             panel.addView(input, new LinearLayout.LayoutParams(
@@ -182,7 +281,14 @@ final class TouchKeyboardHelper {
 
             TextView clear = actionText(context, "CLEAR");
             clear.setOnClickListener(v -> {
-                dispatchTextDelta(lastText, "");
+                if (lastText.isEmpty()) {
+                    // The Android overlay may be empty while Minecraft's focused
+                    // field still contains its default value, such as "New World".
+                    // In that case, send enough backspaces to clear Minecraft's field.
+                    sendRepeatedBackspace(DEFAULT_CLEAR_BACKSPACES);
+                } else {
+                    dispatchTextDelta(lastText, "");
+                }
                 internalChange = true;
                 input.setText("");
                 lastText = "";
@@ -191,7 +297,7 @@ final class TouchKeyboardHelper {
             });
             buttons.addView(clear);
 
-            TextView enter = actionText(context, "ENTER");
+            TextView enter = actionText(context, submitSendsEnter ? "ENTER" : "DONE");
             enter.setOnClickListener(v -> submitCurrentText());
             buttons.addView(enter);
 
@@ -227,8 +333,16 @@ final class TouchKeyboardHelper {
             });
 
             input.setOnEditorActionListener((v, actionId, event) -> {
-                if (actionId == EditorInfo.IME_ACTION_DONE
-                        || (event != null && event.getAction() == KeyEvent.ACTION_UP && event.getKeyCode() == KeyEvent.KEYCODE_ENTER)) {
+                boolean imeDoneOrSend = actionId == EditorInfo.IME_ACTION_DONE
+                        || actionId == EditorInfo.IME_ACTION_SEND
+                        || actionId == EditorInfo.IME_ACTION_GO
+                        || actionId == EditorInfo.IME_ACTION_UNSPECIFIED;
+                boolean enterKey = event != null
+                        && event.getKeyCode() == KeyEvent.KEYCODE_ENTER
+                        && event.getAction() == KeyEvent.ACTION_DOWN
+                        && event.getRepeatCount() == 0;
+
+                if (imeDoneOrSend || enterKey) {
                     submitCurrentText();
                     return true;
                 }
@@ -267,9 +381,13 @@ final class TouchKeyboardHelper {
         }
 
         private void submitCurrentText() {
-            // Text is sent as the user types. ENTER should submit Minecraft chat
-            // and then remove both the Android keyboard and our preview panel.
-            sendKeyTap(GLFW_PRESS_KEY_ENTER);
+            // Text is sent as the user types. In menu text fields such as the
+            // Create World name box, Android Enter/Done must only close this IME
+            // overlay. Pressing Minecraft Enter there activates the focused
+            // button and can create the world by accident.
+            if (submitSendsEnter) {
+                sendKeyTap(GLFW_PRESS_KEY_ENTER);
+            }
             TouchKeyboardHelper.hideKeyboard(true);
         }
 
@@ -304,7 +422,14 @@ final class TouchKeyboardHelper {
                 for (int i = 0; i < inserted.length(); i++) {
                     char c = inserted.charAt(i);
                     if (c == '\n' || c == '\r') {
-                        sendKeyTap(GLFW_PRESS_KEY_ENTER);
+                        // Some IMEs insert a newline instead of sending the Done
+                        // editor action. Only forward that as Minecraft Enter in
+                        // in-game/chat mode. In menu text fields, close the IME
+                        // without pressing Minecraft Enter.
+                        if (submitSendsEnter) {
+                            sendKeyTap(GLFW_PRESS_KEY_ENTER);
+                        }
+                        TouchKeyboardHelper.hideKeyboard(true);
                     } else {
                         sendChar(c);
                     }
@@ -423,6 +548,13 @@ final class TouchKeyboardHelper {
         if (c == '/') return 47;
         if (c == '`') return 96;
         return -1;
+    }
+
+    private static void sendRepeatedBackspace(int count) {
+        int safeCount = Math.max(1, Math.min(DEFAULT_CLEAR_BACKSPACES, count));
+        for (int i = 0; i < safeCount; i++) {
+            sendKeyTap(GLFW_PRESS_KEY_BACKSPACE);
+        }
     }
 
     private static void sendKeyTap(int keyCode) {

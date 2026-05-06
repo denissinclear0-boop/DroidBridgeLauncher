@@ -88,9 +88,16 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
 
     private static final long POINTER_REGRAB_RELATIVE_SUPPRESS_NANOS = 220_000_000L;
 
+    // Some Bluetooth mice and scrcpy UHID mice are only trustworthy after Android
+    // has delivered a real pointer event. Keep a short event-based allowance so
+    // pointer capture can be requested even when InputDevice.isExternal() or the
+    // device-list metadata is wrong.
+    private static final long HARDWARE_POINTER_KEEPALIVE_NANOS = 3_000_000_000L;
+
     private final Set<Integer> hardwareKeysDown = new HashSet<>();
     private final Set<Integer> hardwareMouseButtonsDown = new HashSet<>();
     private long suppressRelativeCursorUntilNanos;
+    private long lastHardwarePointerEventNanos;
 
     // Some Android devices dispatch physical mouse clicks as normal touch DOWN/UP
     // events instead of generic ACTION_BUTTON_PRESS/RELEASE events. Keep the
@@ -1007,7 +1014,7 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
                 resetTouchTracking();
                 releaseAllHardwareMouseButtons();
 
-                if (hasRealExternalPointerDevice()) {
+                if (shouldUsePointerCapture()) {
                     safeRequestPointerCapture();
                 } else {
                     // Touch/controller-only mode should not hold Android pointer capture.
@@ -1023,15 +1030,15 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
     @Override
     protected void onAttachedToWindow() {
         super.onAttachedToWindow();
-        if (grabbed && hasRealExternalPointerDevice()) safeRequestPointerCapture();
+        if (grabbed && shouldUsePointerCapture()) safeRequestPointerCapture();
     }
 
     @Override
     public void onWindowFocusChanged(boolean hasWindowFocus) {
         super.onWindowFocusChanged(hasWindowFocus);
-        if (hasWindowFocus && grabbed && hasRealExternalPointerDevice()) {
+        if (hasWindowFocus && grabbed && shouldUsePointerCapture()) {
             safeRequestPointerCapture();
-        } else if (!hasWindowFocus || !hasRealExternalPointerDevice()) {
+        } else if (!hasWindowFocus || !shouldUsePointerCapture()) {
             safeReleasePointerCapture();
         }
     }
@@ -1039,21 +1046,32 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
     private void markTouchInputMode() {
         // If a user disconnects a mouse/keyboard and goes back to touch, do not
         // keep a stale pointer-capture state around. This avoids the touch layer
-        // feeling frozen after hardware disconnects.
-        if (!hasRealExternalPointerDevice()) {
+        // feeling frozen after hardware disconnects. Keep capture only while a
+        // real hardware pointer was seen very recently.
+        if (!hasRecentlySeenHardwarePointer() && !hasRealExternalPointerDevice()) {
             safeReleasePointerCapture();
         }
     }
 
     private void markHardwarePointerInputMode() {
-        if (grabbed && hasRealExternalPointerDevice()) {
+        lastHardwarePointerEventNanos = System.nanoTime();
+        if (grabbed) {
             safeRequestPointerCapture();
         }
     }
 
+    private boolean hasRecentlySeenHardwarePointer() {
+        long lastSeen = lastHardwarePointerEventNanos;
+        return lastSeen > 0L && System.nanoTime() - lastSeen < HARDWARE_POINTER_KEEPALIVE_NANOS;
+    }
+
+    private boolean shouldUsePointerCapture() {
+        return hasRecentlySeenHardwarePointer() || hasRealExternalPointerDevice();
+    }
+
     private void safeRequestPointerCapture() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O || !hasWindowFocus() || !isShown()) return;
-        if (!hasRealExternalPointerDevice()) return;
+        if (!shouldUsePointerCapture()) return;
         try {
             requestPointerCapture();
         } catch (Throwable ignored) {
@@ -1113,7 +1131,6 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
     public void setOnRenderingStartedListener(@Nullable OnRenderingStartedListener listener) {
         this.renderingStartedListener = listener;
     }
-
 
     /**
      * Lets the Activity route KEYCODE_BACK from a physical keyboard into Minecraft
@@ -1261,6 +1278,14 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
         }
     }
 
+    private static boolean isSoftKeyboardGeneratedEvent(@NonNull KeyEvent event) {
+        // Do not consume normal Android IME events from the on-screen keyboard.
+        // Scrcpy SDK keyboard input is often reported with VIRTUAL_KEYBOARD too,
+        // but it normally does not carry FLAG_SOFT_KEYBOARD, so keep that path
+        // available for desktop testing.
+        return (event.getFlags() & KeyEvent.FLAG_SOFT_KEYBOARD) != 0;
+    }
+
     private boolean isPhysicalKeyboardEvent(@NonNull KeyEvent event) {
         // A lot of USB/Bluetooth keyboards report Esc as Android BACK instead of
         // KEYCODE_ESCAPE. Keep only physical-keyboard BACK inside Minecraft; real
@@ -1269,7 +1294,7 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
             return isPhysicalKeyboardBackAsEsc(event);
         }
 
-        if (event.getDeviceId() == KeyCharacterMap.VIRTUAL_KEYBOARD) return false;
+        if (isSoftKeyboardGeneratedEvent(event)) return false;
         if (isControllerLikeKeyCode(event.getKeyCode())) return false;
 
         int source = event.getSource();
@@ -1310,14 +1335,14 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
         int source = event.getSource();
         boolean sourceKeyboard = (source & InputDevice.SOURCE_KEYBOARD) == InputDevice.SOURCE_KEYBOARD;
         boolean deviceKeyboard = device != null && device.getKeyboardType() != InputDevice.KEYBOARD_TYPE_NONE;
-        boolean nonVirtualDevice = event.getDeviceId() != KeyCharacterMap.VIRTUAL_KEYBOARD;
+        boolean notSoftKeyboard = (event.getFlags() & KeyEvent.FLAG_SOFT_KEYBOARD) == 0;
         boolean hasHardwareScanCode = safeScanCode(event) != 0;
 
-        // System navigation BACK usually has a virtual device and no useful scancode.
-        // Hardware keyboard Esc-as-Back normally has a keyboard source/device and/or
-        // a non-zero scancode. This keeps launcher Back dialogs from opening when a
-        // physical keyboard user presses Esc.
-        return (sourceKeyboard || deviceKeyboard) && (nonVirtualDevice || hasHardwareScanCode);
+        // System navigation BACK usually has no useful scancode. Hardware keyboard
+        // Esc-as-Back normally has a keyboard source/device and/or a non-zero scancode.
+        // Scrcpy SDK keyboard can be VIRTUAL_KEYBOARD, so do not reject it by device id
+        // unless Android explicitly marks the event as soft-keyboard generated.
+        return (sourceKeyboard || deviceKeyboard) && notSoftKeyboard && (hasHardwareScanCode || event.getDeviceId() != KeyCharacterMap.VIRTUAL_KEYBOARD);
     }
 
     private static boolean isControllerLikeKeyCode(int keyCode) {
@@ -1344,16 +1369,20 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
         if (isGameControllerDevice(device)) return false;
 
         int sources = device.getSources();
-        boolean hasMouseSource = (sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
-                || (sources & InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE;
-        if (!hasMouseSource) return false;
+        boolean hasPointerSource = (sources & InputDevice.SOURCE_MOUSE) == InputDevice.SOURCE_MOUSE
+                || (sources & InputDevice.SOURCE_MOUSE_RELATIVE) == InputDevice.SOURCE_MOUSE_RELATIVE
+                || (sources & InputDevice.SOURCE_TOUCHPAD) == InputDevice.SOURCE_TOUCHPAD
+                || device.supportsSource(InputDevice.SOURCE_MOUSE)
+                || device.supportsSource(InputDevice.SOURCE_MOUSE_RELATIVE)
+                || device.supportsSource(InputDevice.SOURCE_TOUCHPAD);
+        if (!hasPointerSource) return false;
 
         String name = safeLower(device.getName());
         if (looksLikeControllerName(name) || looksLikeVirtualTouchName(name)) return false;
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return device.isExternal() || looksLikeMouseName(name);
-        }
+        // Bluetooth mice/keyboards with touchpads sometimes report bad isExternal()
+        // metadata or generic names. If Android exposes a mouse/touchpad source and
+        // it is not a controller/virtual touch helper, accept it as a real pointer.
         return true;
     }
 
@@ -1393,8 +1422,6 @@ public class MinecraftGLSurface extends FrameLayout implements GrabListener {
 
     private static boolean looksLikeVirtualTouchName(@NonNull String name) {
         return name.contains("virtual")
-                || name.contains("touch")
-                || name.contains("touchpad")
                 || name.contains("touchscreen")
                 || name.contains("touch mapping")
                 || name.contains("touchmapping")

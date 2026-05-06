@@ -95,9 +95,11 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
      */
     private static final int NO_POINTER_ID = -1;
     private static final int MOUSE_BUTTON_LEFT = 0;
+    private static final int GLFW_KEY_Q = 81;
 
     private final Handler gestureHandler = new Handler(Looper.getMainLooper());
     private final int cameraTouchSlop;
+    private final int doubleTapSlop;
 
     /** Pointer ID for the right-thumb look/attack stream. */
     private int cameraPointerId = NO_POINTER_ID;
@@ -109,9 +111,26 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
     private boolean cameraLongPressAttackActive;
     @Nullable private Runnable cameraLongPressRunnable;
 
+    private long lastTapToDropUptimeMs;
+    private float lastTapToDropX;
+    private float lastTapToDropY;
+
     /** GUI fallback: used only when Minecraft is not grabbing the mouse. */
     private int passthroughPointerId = NO_POINTER_ID;
     private long passthroughDownTime;
+
+    /**
+     * Menu fake-mouse routing. When the virtual mouse preference is enabled,
+     * empty-space touches in Minecraft GUIs act like a small touchpad instead
+     * of absolute touchscreen clicks. This keeps the pointer offset from the
+     * finger like Pojav/Zalith-style virtual mouse controls.
+     */
+    private int virtualMousePointerId = NO_POINTER_ID;
+    private float virtualMouseDownX;
+    private float virtualMouseDownY;
+    private float virtualMouseLastX;
+    private float virtualMouseLastY;
+    private boolean virtualMouseMovedPastSlop;
 
     /** In-game hotbar touch routing. Keep this separate from camera/buttons. */
     private int hotbarPointerId = NO_POINTER_ID;
@@ -150,7 +169,9 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         hotbarDebugTextPaint.setTextSize(12f * getResources().getDisplayMetrics().scaledDensity);
         hotbarDebugTextPaint.setShadowLayer(3f, 0f, 0f, Color.BLACK);
 
-        cameraTouchSlop = ViewConfiguration.get(context).getScaledTouchSlop();
+        ViewConfiguration configuration = ViewConfiguration.get(context);
+        cameraTouchSlop = configuration.getScaledTouchSlop();
+        doubleTapSlop = configuration.getScaledDoubleTapSlop();
     }
 
     public void setPassthroughTarget(@Nullable View passthroughTarget) {
@@ -247,7 +268,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
             if (!editMode && !control.visibleInGame) continue;
             TouchControlButtonView button = new TouchControlButtonView(getContext(), control, this);
             button.setEditMode(editMode);
-            button.setVisibility(editMode || controlsVisible ? VISIBLE : INVISIBLE);
+            button.setVisibility(shouldShowControlButton(control) ? VISIBLE : INVISIBLE);
             int width = Math.min(metrics.toScreenWidth(control.width), parentWidth);
             int height = Math.min(metrics.toScreenHeight(control.height), parentHeight);
             FrameLayout.LayoutParams params = new FrameLayout.LayoutParams(width, height);
@@ -368,6 +389,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
                 dispatchActiveControlPointers(event, MotionEvent.ACTION_MOVE);
                 dispatchActiveHotbarPointer(event);
                 dispatchActiveCameraPointer(event);
+                dispatchActiveVirtualMousePointer(event);
                 dispatchActivePassthroughPointer(event, MotionEvent.ACTION_MOVE);
                 return true;
 
@@ -382,6 +404,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
             case MotionEvent.ACTION_CANCEL:
                 dispatchCancelToControlPointers(event);
                 cancelCameraPointer(true);
+                cancelVirtualMousePointer();
                 dispatchActivePassthroughPointer(event, MotionEvent.ACTION_CANCEL);
                 clearRuntimeTouchRouting();
                 return true;
@@ -569,6 +592,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         boolean originalToggle = data.toggle;
         boolean originalVisibleInGame = data.visibleInGame;
         boolean originalVisibleInMenu = data.visibleInMenu;
+        boolean originalVisibleWhenControlsHidden = data.visibleWhenControlsHidden;
         String originalRawX = data.rawX;
         String originalRawY = data.rawY;
 
@@ -755,6 +779,13 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         visibleInMenu.setChecked(data.visibleInMenu);
         layout.addView(visibleInMenu);
 
+        CheckBox visibleWhenControlsHidden = new CheckBox(context);
+        visibleWhenControlsHidden.setText("Stay visible when touch controls are hidden");
+        visibleWhenControlsHidden.setTextColor(0xFFE0E0E0);
+        visibleWhenControlsHidden.setChecked(data.visibleWhenControlsHidden
+                || TouchControlData.shouldStayVisibleWhenControlsHiddenByDefault(data.action));
+        layout.addView(visibleWhenControlsHidden);
+
         CheckBox virtualMouse = new CheckBox(context);
         virtualMouse.setText("Show virtual cursor");
         virtualMouse.setTextColor(0xFFE0E0E0);
@@ -920,6 +951,8 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
                 data.toggle = toggle.isChecked();
                 data.visibleInGame = visibleInGame.isChecked();
                 data.visibleInMenu = visibleInMenu.isChecked();
+                data.visibleWhenControlsHidden = visibleWhenControlsHidden.isChecked()
+                        || TouchControlData.shouldStayVisibleWhenControlsHiddenByDefault(data.action);
                 data.rawX = null;
                 data.rawY = null;
                 accepted[0] = true;
@@ -952,6 +985,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
                 data.toggle = originalToggle;
                 data.visibleInGame = originalVisibleInGame;
                 data.visibleInMenu = originalVisibleInMenu;
+                data.visibleWhenControlsHidden = originalVisibleWhenControlsHidden;
                 data.rawX = originalRawX;
                 data.rawY = originalRawY;
                 rebuildWhenSized();
@@ -1372,6 +1406,10 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         }
     }
 
+    private static float maxCursorCoordinate(float size) {
+        return Math.max(0f, size - 1f);
+    }
+
     private static float clamp(float value, float min, float max) {
         return Math.max(min, Math.min(max, value));
     }
@@ -1396,7 +1434,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
             }
         }
 
-        TouchControlButtonView control = controlsVisible ? findControlUnder(x, y) : null;
+        TouchControlButtonView control = findControlUnder(x, y);
         if (control != null) {
             controlPointerTargets.put(pointerId, control);
             dispatchSinglePointerToControl(event, pointerIndex, MotionEvent.ACTION_DOWN, control);
@@ -1409,6 +1447,14 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         if (grabbed) {
             if (cameraPointerId == NO_POINTER_ID) {
                 startCameraPointer(event, pointerIndex, pointerId);
+                return true;
+            }
+            return hasActiveTouchRoute();
+        }
+
+        if (ControlsPreferences.isVirtualMouseEnabled(getContext())) {
+            if (virtualMousePointerId == NO_POINTER_ID) {
+                startVirtualMousePointer(event, pointerIndex, pointerId);
                 return true;
             }
             return hasActiveTouchRoute();
@@ -1442,6 +1488,10 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
 
         if (pointerId == hotbarPointerId) {
             finishHotbarPointer();
+        }
+
+        if (pointerId == virtualMousePointerId) {
+            finishVirtualMousePointer(event, pointerIndex, false);
         }
 
         if (pointerId == passthroughPointerId) {
@@ -1483,6 +1533,64 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         }
     }
 
+    private void startVirtualMousePointer(@NonNull MotionEvent event, int pointerIndex, int pointerId) {
+        if (pointerIndex < 0 || pointerIndex >= event.getPointerCount()) return;
+
+        virtualMousePointerId = pointerId;
+        virtualMouseDownX = event.getX(pointerIndex);
+        virtualMouseDownY = event.getY(pointerIndex);
+        virtualMouseLastX = virtualMouseDownX;
+        virtualMouseLastY = virtualMouseDownY;
+        virtualMouseMovedPastSlop = false;
+        ensureVirtualMouseCursorInBounds();
+    }
+
+    private void dispatchActiveVirtualMousePointer(@NonNull MotionEvent event) {
+        if (virtualMousePointerId == NO_POINTER_ID) return;
+
+        int pointerIndex = event.findPointerIndex(virtualMousePointerId);
+        if (pointerIndex < 0) return;
+
+        float x = event.getX(pointerIndex);
+        float y = event.getY(pointerIndex);
+        float dx = x - virtualMouseLastX;
+        float dy = y - virtualMouseLastY;
+        virtualMouseLastX = x;
+        virtualMouseLastY = y;
+
+        float totalDx = x - virtualMouseDownX;
+        float totalDy = y - virtualMouseDownY;
+        if (!virtualMouseMovedPastSlop
+                && ((totalDx * totalDx) + (totalDy * totalDy)) > (cameraTouchSlop * cameraTouchSlop)) {
+            virtualMouseMovedPastSlop = true;
+        }
+
+        if (dx == 0f && dy == 0f) return;
+        sendVirtualMouseDelta(dx, dy);
+    }
+
+    private void finishVirtualMousePointer(@NonNull MotionEvent event, int pointerIndex, boolean cancelled) {
+        if (pointerIndex >= 0 && pointerIndex < event.getPointerCount() && !cancelled) {
+            dispatchActiveVirtualMousePointer(event);
+        }
+
+        if (!cancelled && !virtualMouseMovedPastSlop) {
+            // A quick tap in fake-mouse mode clicks at the virtual cursor, not at
+            // the finger position. For drag/click-hold, use a normal Mouse Left
+            // touch button while moving the fake mouse with another finger.
+            sendLeftMouse(true);
+            sendLeftMouse(false);
+        }
+
+        cancelVirtualMousePointer();
+    }
+
+    private void cancelVirtualMousePointer() {
+        virtualMousePointerId = NO_POINTER_ID;
+        virtualMouseDownX = virtualMouseDownY = virtualMouseLastX = virtualMouseLastY = 0f;
+        virtualMouseMovedPastSlop = false;
+    }
+
     private void startCameraPointer(@NonNull MotionEvent event, int pointerIndex, int pointerId) {
         if (pointerIndex < 0 || pointerIndex >= event.getPointerCount()) return;
 
@@ -1493,7 +1601,9 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         cameraLastY = cameraDownY;
         cameraMovedPastSlop = false;
         cameraLongPressAttackActive = false;
-        scheduleCameraLongPressAttack();
+        if (ControlsPreferences.isMinecraftTouchGesturesEnabled(getContext())) {
+            scheduleCameraLongPressAttack();
+        }
     }
 
     private void dispatchActiveCameraPointer(@NonNull MotionEvent event) {
@@ -1527,12 +1637,15 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
 
         cancelCameraLongPressAttack(cancelled);
 
-        if (!cancelled && cameraLongPressAttackActive) {
+        boolean gesturesEnabled = ControlsPreferences.isMinecraftTouchGesturesEnabled(getContext());
+        if (!cancelled && gesturesEnabled && cameraLongPressAttackActive) {
             sendLeftMouse(false);
-        } else if (!cancelled && !cameraMovedPastSlop) {
-            // Quick tap on the look area acts like the attack button.
-            sendLeftMouse(true);
-            sendLeftMouse(false);
+        } else if (!cancelled && gesturesEnabled && !cameraMovedPastSlop) {
+            if (!handleDoubleTapToDrop(event.getX(pointerIndex), event.getY(pointerIndex), event.getEventTime())) {
+                // Quick tap on the look area acts like the attack button.
+                sendLeftMouse(true);
+                sendLeftMouse(false);
+            }
         }
 
         cameraLongPressAttackActive = false;
@@ -1552,6 +1665,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
     }
 
     private void scheduleCameraLongPressAttack() {
+        if (!ControlsPreferences.isMinecraftTouchGesturesEnabled(getContext())) return;
         cancelCameraLongPressAttack(false);
         cameraLongPressRunnable = () -> {
             if (cameraPointerId == NO_POINTER_ID || cameraMovedPastSlop || cameraLongPressAttackActive) return;
@@ -1559,6 +1673,32 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
             sendLeftMouse(true);
         };
         gestureHandler.postDelayed(cameraLongPressRunnable, ViewConfiguration.getLongPressTimeout());
+    }
+
+    private boolean handleDoubleTapToDrop(float x, float y, long eventTimeMs) {
+        if (!ControlsPreferences.isDoubleTapToDropEnabled(getContext())) {
+            lastTapToDropUptimeMs = 0L;
+            return false;
+        }
+
+        long lastTime = lastTapToDropUptimeMs;
+        long elapsed = lastTime <= 0L ? Long.MAX_VALUE : eventTimeMs - lastTime;
+        float dx = x - lastTapToDropX;
+        float dy = y - lastTapToDropY;
+        float maxDistance = Math.max(cameraTouchSlop, doubleTapSlop);
+        boolean doubleTap = elapsed >= 0L
+                && elapsed <= ViewConfiguration.getDoubleTapTimeout()
+                && ((dx * dx) + (dy * dy)) <= (maxDistance * maxDistance);
+
+        lastTapToDropUptimeMs = eventTimeMs;
+        lastTapToDropX = x;
+        lastTapToDropY = y;
+
+        if (!doubleTap) return false;
+
+        lastTapToDropUptimeMs = 0L;
+        sendKeyTap(GLFW_KEY_Q);
+        return true;
     }
 
     private void cancelCameraLongPressAttack(boolean cancelActivePress) {
@@ -1631,6 +1771,47 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
         }
     }
 
+    private void ensureVirtualMouseCursorInBounds() {
+        try {
+            CallbackBridge.setInputReady(true);
+            float maxX = maxCursorCoordinate(CallbackBridge.windowWidth);
+            float maxY = maxCursorCoordinate(CallbackBridge.windowHeight);
+
+            boolean invalid = Float.isNaN(CallbackBridge.mouseX)
+                    || Float.isNaN(CallbackBridge.mouseY)
+                    || CallbackBridge.mouseX < 0f
+                    || CallbackBridge.mouseY < 0f
+                    || CallbackBridge.mouseX > maxX
+                    || CallbackBridge.mouseY > maxY;
+            if (invalid) {
+                CallbackBridge.mouseX = maxX / 2f;
+                CallbackBridge.mouseY = maxY / 2f;
+                CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
+            }
+        } catch (Throwable throwable) {
+            Logging.e(TAG, "Unable to prepare virtual mouse cursor", throwable);
+        }
+    }
+
+    private void sendVirtualMouseDelta(float dx, float dy) {
+        try {
+            CallbackBridge.setInputReady(true);
+            float windowWidth = Math.max(1f, CallbackBridge.windowWidth);
+            float windowHeight = Math.max(1f, CallbackBridge.windowHeight);
+            float viewWidth = Math.max(1f, getWidth());
+            float viewHeight = Math.max(1f, getHeight());
+
+            float scaledDx = dx * (windowWidth / viewWidth);
+            float scaledDy = dy * (windowHeight / viewHeight);
+
+            CallbackBridge.mouseX = clamp(CallbackBridge.mouseX + scaledDx, 0f, maxCursorCoordinate(windowWidth));
+            CallbackBridge.mouseY = clamp(CallbackBridge.mouseY + scaledDy, 0f, maxCursorCoordinate(windowHeight));
+            CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
+        } catch (Throwable throwable) {
+            Logging.e(TAG, "Unable to send fake virtual mouse delta", throwable);
+        }
+    }
+
     private void sendRelativeCameraDelta(float dx, float dy) {
         try {
             CallbackBridge.setInputReady(true);
@@ -1660,13 +1841,19 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
     }
 
     private void applyControlsVisualState() {
-        boolean childVisible = editMode || controlsVisible;
         for (int i = 0; i < getChildCount(); i++) {
             View child = getChildAt(i);
             if (child instanceof TouchControlButtonView) {
-                child.setVisibility(childVisible ? VISIBLE : INVISIBLE);
+                TouchControlButtonView button = (TouchControlButtonView) child;
+                child.setVisibility(shouldShowControlButton(button.getData()) ? VISIBLE : INVISIBLE);
             }
         }
+    }
+
+    private boolean shouldShowControlButton(@NonNull TouchControlData data) {
+        if (editMode || controlsVisible) return true;
+        return data.visibleWhenControlsHidden
+                || TouchControlData.shouldStayVisibleWhenControlsHiddenByDefault(data.action);
     }
 
     @Nullable
@@ -1849,6 +2036,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
 
     private void clearRuntimeTouchRouting() {
         cancelCameraPointer(true);
+        cancelVirtualMousePointer();
         finishHotbarPointer();
         passthroughPointerId = NO_POINTER_ID;
         passthroughDownTime = 0L;
@@ -1859,6 +2047,7 @@ public final class TouchControlsOverlay extends FrameLayout implements TouchCont
     private boolean hasActiveTouchRoute() {
         return cameraPointerId != NO_POINTER_ID
                 || hotbarPointerId != NO_POINTER_ID
+                || virtualMousePointerId != NO_POINTER_ID
                 || passthroughPointerId != NO_POINTER_ID
                 || controlPointerTargets.size() > 0;
     }

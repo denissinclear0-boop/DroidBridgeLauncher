@@ -18,6 +18,7 @@ import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.os.Build;
+import android.text.InputType;
 import android.view.Gravity;
 import android.view.InputDevice;
 import android.view.View;
@@ -26,11 +27,13 @@ import android.view.Window;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
 import android.widget.Spinner;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -328,9 +331,16 @@ public final class GamepadMappingDialog {
             window.setDimAmount(0.58f);
         }
 
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setTextColor(COLOR_ACCENT);
-        dialog.getButton(AlertDialog.BUTTON_NEGATIVE).setTextColor(COLOR_ACCENT);
-        dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setTextColor(COLOR_ACCENT);
+        tintDialogButton(dialog, AlertDialog.BUTTON_POSITIVE);
+        tintDialogButton(dialog, AlertDialog.BUTTON_NEGATIVE);
+        tintDialogButton(dialog, AlertDialog.BUTTON_NEUTRAL);
+    }
+
+    private static void tintDialogButton(@NonNull AlertDialog dialog, int whichButton) {
+        TextView button = dialog.getButton(whichButton);
+        if (button != null) {
+            button.setTextColor(COLOR_ACCENT);
+        }
     }
 
     @NonNull
@@ -551,6 +561,21 @@ public final class GamepadMappingDialog {
         tintSeekBar(seekBar);
         seekBar.setMax(Math.max(1, max - min));
         seekBar.setProgress(floatToProgress(value, min, max));
+
+        label.setOnClickListener(v -> showNumberInputDialog(
+                activity,
+                title,
+                Math.round(progressToFloat(seekBar.getProgress(), min)),
+                min,
+                max,
+                "",
+                newValue -> {
+                    seekBar.setProgress(floatToProgress(newValue, min, max));
+                    label.setText(title + ": " + newValue);
+                }
+        ));
+        label.setText(title + ": " + Math.round(progressToFloat(seekBar.getProgress(), min)));
+
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -604,6 +629,21 @@ public final class GamepadMappingDialog {
         tintSeekBar(seekBar);
         seekBar.setMax(GamepadMappingStore.MAX_SENSITIVITY - GamepadMappingStore.MIN_SENSITIVITY);
         seekBar.setProgress(sensitivityToProgress(sensitivity));
+
+        label.setOnClickListener(v -> showNumberInputDialog(
+                activity,
+                title,
+                progressToSensitivity(seekBar.getProgress()),
+                GamepadMappingStore.MIN_SENSITIVITY,
+                GamepadMappingStore.MAX_SENSITIVITY,
+                "%",
+                newValue -> {
+                    seekBar.setProgress(sensitivityToProgress(newValue));
+                    label.setText(title + ": " + newValue + "%");
+                }
+        ));
+        label.setText(title + ": " + progressToSensitivity(seekBar.getProgress()) + "%");
+
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -631,7 +671,7 @@ public final class GamepadMappingDialog {
         AlertDialog dialog = activeDialog;
         if (dialog == null || dialog.getWindow() == null) return;
         dialog.getWindow().setDimAmount(previewing ? 0.02f : 0.32f);
-        dialog.getWindow().getDecorView().setAlpha(previewing ? 0.12f : 1.0f);
+        dialog.getWindow().getDecorView().setAlpha(1.0f);
     }
 
     private static int sensitivityToProgress(int sensitivity) {
@@ -668,6 +708,22 @@ public final class GamepadMappingDialog {
         tintSeekBar(seekBar);
         seekBar.setMax(GamepadMappingStore.MAX_MOUSE_DPI_SCALE - GamepadMappingStore.MIN_MOUSE_DPI_SCALE);
         seekBar.setProgress(mouseDpiToProgress(dpiScale));
+
+        label.setOnClickListener(v -> showNumberInputDialog(
+                activity,
+                title,
+                progressToMouseDpi(seekBar.getProgress()),
+                GamepadMappingStore.MIN_MOUSE_DPI_SCALE,
+                GamepadMappingStore.MAX_MOUSE_DPI_SCALE,
+                "%",
+                newValue -> {
+                    seekBar.setProgress(mouseDpiToProgress(newValue));
+                    label.setText(title + ": " + newValue + "%");
+                    store.setHardwareMouseDpiScale(newValue);
+                }
+        ));
+        label.setText(title + ": " + progressToMouseDpi(seekBar.getProgress()) + "%");
+
         seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
             @Override
             public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
@@ -704,6 +760,88 @@ public final class GamepadMappingDialog {
 
     private static int progressToMouseDpi(int progress) {
         return GamepadMappingStore.MIN_MOUSE_DPI_SCALE + progress;
+    }
+
+    private interface NumberValueCallback {
+        void onValueSelected(int value);
+    }
+
+    private static void showNumberInputDialog(
+            @NonNull Activity activity,
+            @NonNull String title,
+            int currentValue,
+            int min,
+            int max,
+            @NonNull String suffix,
+            @NonNull NumberValueCallback callback
+    ) {
+        EditText input = new EditText(activity);
+        input.setText(String.valueOf(currentValue));
+        input.setSelectAllOnFocus(true);
+        input.setSingleLine(true);
+        input.setTextColor(COLOR_TEXT_PRIMARY);
+        input.setHintTextColor(COLOR_TEXT_MUTED);
+        input.setInputType(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_SIGNED);
+        input.setPadding(dp(activity, 16), dp(activity, 10), dp(activity, 16), dp(activity, 10));
+
+        LinearLayout container = new LinearLayout(activity);
+        container.setOrientation(LinearLayout.VERTICAL);
+        int padding = dp(activity, 18);
+        container.setPadding(padding, dp(activity, 8), padding, 0);
+
+        TextView hint = new TextView(activity);
+        hint.setText("Enter a value from " + min + " to " + max + suffix + ".");
+        hint.setTextSize(13);
+        hint.setTextColor(COLOR_TEXT_SECONDARY);
+        hint.setPadding(0, 0, 0, dp(activity, 8));
+
+        container.addView(hint, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+        container.addView(input, new LinearLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT
+        ));
+
+        AlertDialog numberDialog = new AlertDialog.Builder(activity)
+                .setTitle(title)
+                .setView(container)
+                .setPositiveButton("Apply", null)
+                .setNegativeButton(android.R.string.cancel, null)
+                .create();
+
+        numberDialog.setOnShowListener(dialog -> {
+            styleDialogChrome(activity, numberDialog);
+
+            input.requestFocus();
+            Window window = numberDialog.getWindow();
+            if (window != null) {
+                window.setSoftInputMode(android.view.WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE);
+            }
+
+            TextView positiveButton = numberDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            if (positiveButton != null) {
+                positiveButton.setOnClickListener(v -> {
+                    String raw = input.getText() == null ? "" : input.getText().toString().trim();
+                    if (raw.isEmpty() || "-".equals(raw)) {
+                        Toast.makeText(activity, "Enter a number.", Toast.LENGTH_SHORT).show();
+                        return;
+                    }
+
+                    try {
+                        int value = Integer.parseInt(raw);
+                        int clamped = Math.max(min, Math.min(max, value));
+                        callback.onValueSelected(clamped);
+                        numberDialog.dismiss();
+                    } catch (NumberFormatException e) {
+                        Toast.makeText(activity, "Enter a valid number.", Toast.LENGTH_SHORT).show();
+                    }
+                });
+            }
+        });
+
+        numberDialog.show();
     }
 
     private static void addSection(

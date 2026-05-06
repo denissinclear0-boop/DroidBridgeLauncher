@@ -54,6 +54,8 @@ final class TouchControlButtonView extends TextView {
     private static final int GLFW_KEY_A = 65;
     private static final int GLFW_KEY_S = 83;
     private static final int GLFW_KEY_D = 68;
+    private static final int GLFW_KEY_T = 84;
+    private static final int GLFW_KEY_SLASH = 47;
     private static final int GLFW_KEY_LEFT_CONTROL = 341;
 
     private final TouchControlData data;
@@ -372,7 +374,12 @@ final class TouchControlButtonView extends TextView {
             CallbackBridge.setInputReady(true);
             if (TouchControlActions.KEY.equals(data.action)) {
                 for (int key : data.normalizedKeyCodes()) {
-                    if (key >= 0) sendKey(key, down);
+                    if (key >= 0) {
+                        if (down && isChatOpenKey(key)) {
+                            TouchKeyboardHelper.markChatKeyPressed();
+                        }
+                        sendKey(key, down);
+                    }
                 }
                 return;
             }
@@ -390,6 +397,10 @@ final class TouchControlButtonView extends TextView {
         } catch (Throwable throwable) {
             Logging.e(TAG, "Unable to send touch control input", throwable);
         }
+    }
+
+    private static boolean isChatOpenKey(int keyCode) {
+        return keyCode == GLFW_KEY_T || keyCode == GLFW_KEY_SLASH;
     }
 
     private void sendKey(int keyCode, boolean down) {

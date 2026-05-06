@@ -17,7 +17,6 @@ import android.content.Context;
 import android.database.Cursor;
 import android.net.Uri;
 import android.provider.DocumentsContract;
-import android.provider.OpenableColumns;
 
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
@@ -27,6 +26,8 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.HashMap;
+import java.util.Locale;
 
 import ca.dnamobile.javalauncher.feature.log.Logging;
 
@@ -80,6 +81,64 @@ public final class SafMinecraftMirror {
 
         if (progress != null) progress.onProgress(2, "Reading scoped storage mirror...");
         copyDocumentDirectoryToLocal(context, rootDocument, launcherHome, progress, "");
+    }
+
+    /**
+     * Fast metadata-only restore for the launcher UI. This intentionally avoids
+     * copying Minecraft assets, libraries, saves, mods, resourcepacks, shaderpacks,
+     * logs, screenshots, and jars. It is used only so the instance adapter can be
+     * populated quickly after the user picks a scoped-storage folder.
+     */
+    public static void copyTreeMetadataToLocalLauncherHome(
+            @NonNull Context context,
+            @NonNull Uri treeUri,
+            @NonNull File launcherHome,
+            @Nullable Progress progress
+    ) throws Exception {
+        Uri rootDocument = getRootDocumentUri(treeUri);
+        if (rootDocument == null) return;
+
+        if (!launcherHome.exists() && !launcherHome.mkdirs()) {
+            throw new IllegalStateException("Unable to create scoped storage metadata mirror: " + launcherHome.getAbsolutePath());
+        }
+
+        if (progress != null) progress.onProgress(2, "Reading launcher metadata...");
+        copyDocumentMetadataToLocal(context, rootDocument, launcherHome, progress, "");
+    }
+
+    /**
+     * Restores one relative path from the scoped-storage tree. Use this when the
+     * user opens an instance details screen and only that instance folder is needed.
+     */
+    public static void copyRelativePathToLocalLauncherHome(
+            @NonNull Context context,
+            @NonNull Uri treeUri,
+            @NonNull File launcherHome,
+            @NonNull String relativePath,
+            @Nullable Progress progress
+    ) throws Exception {
+        Uri rootDocument = getRootDocumentUri(treeUri);
+        if (rootDocument == null) return;
+
+        String cleaned = cleanRelativePath(relativePath);
+        if (cleaned.isEmpty()) {
+            copyDocumentDirectoryToLocal(context, rootDocument, launcherHome, progress, "");
+            return;
+        }
+
+        Uri source = findDescendant(context, rootDocument, cleaned);
+        if (source == null) {
+            Logging.i(TAG, "Scoped relative restore target not found: " + cleaned);
+            return;
+        }
+
+        File target = new File(launcherHome, cleaned.replace('/', File.separatorChar));
+        if (isDirectory(context, source)) {
+            copyDocumentDirectoryToLocal(context, source, target, progress, cleaned);
+        } else {
+            if (progress != null) progress.onProgress(3, "Reading scoped storage: " + cleaned);
+            copyDocumentFileToLocal(context, source, target, queryDocumentSize(context, source), cleaned);
+        }
     }
 
     @Nullable
@@ -207,18 +266,30 @@ public final class SafMinecraftMirror {
         File[] children = localDirectory.listFiles();
         if (children == null) return;
 
+        HashMap<String, Uri> existingDirectories = new HashMap<>();
+        HashMap<String, Uri> existingFiles = new HashMap<>();
+        HashMap<String, Long> existingFileSizes = new HashMap<>();
+        for (DocumentEntry entry : listChildren(context, documentDirectory)) {
+            if (entry.directory) {
+                existingDirectories.put(entry.displayName, entry.uri);
+            } else {
+                existingFiles.put(entry.displayName, entry.uri);
+                existingFileSizes.put(entry.displayName, entry.size);
+            }
+        }
+
         java.util.Arrays.sort(children, (a, b) -> a.getName().compareToIgnoreCase(b.getName()));
         for (File child : children) {
             if (child.getName().equals("launcher_log")) continue;
             if (child.getName().equals(".java_launcher_saf_tmp")) continue;
 
             if (child.isDirectory()) {
-                Uri childDirectory = ensureDirectory(context, documentDirectory, child.getName());
+                Uri childDirectory = ensureDirectory(context, documentDirectory, child.getName(), existingDirectories);
                 copyLocalDirectoryToDocument(context, child, childDirectory, progress, rootForDisplay);
             } else if (child.isFile()) {
                 String relative = relativePath(rootForDisplay, child);
                 if (progress != null) progress.onProgress(99, "Syncing scoped storage: " + relative);
-                copyLocalFileToDocument(context, child, documentDirectory, child.getName());
+                copyLocalFileToDocument(context, child, documentDirectory, child.getName(), relative, existingFiles, existingFileSizes);
             }
         }
     }
@@ -243,9 +314,103 @@ public final class SafMinecraftMirror {
                 copyDocumentDirectoryToLocal(context, entry.uri, localChild, progress, relative);
             } else {
                 if (progress != null) progress.onProgress(3, "Reading scoped storage: " + relative);
-                copyDocumentFileToLocal(context, entry.uri, localChild);
+                copyDocumentFileToLocal(context, entry.uri, localChild, entry.size, relative);
             }
         }
+    }
+
+    private static void copyDocumentMetadataToLocal(
+            @NonNull Context context,
+            @NonNull Uri documentDirectory,
+            @NonNull File localDirectory,
+            @Nullable Progress progress,
+            @NonNull String relativePrefix
+    ) throws Exception {
+        if (!localDirectory.exists() && !localDirectory.mkdirs()) {
+            throw new IllegalStateException("Unable to create local metadata mirror directory: " + localDirectory.getAbsolutePath());
+        }
+
+        for (DocumentEntry entry : listChildren(context, documentDirectory)) {
+            if (entry.displayName == null || entry.displayName.trim().isEmpty()) continue;
+
+            String relative = relativePrefix.isEmpty() ? entry.displayName : relativePrefix + "/" + entry.displayName;
+            String normalized = normalizeMetadataPath(relative);
+
+            if (entry.directory) {
+                if (!shouldDescendForLauncherMetadata(normalized)) {
+                    continue;
+                }
+
+                File localChild = new File(localDirectory, entry.displayName);
+                copyDocumentMetadataToLocal(context, entry.uri, localChild, progress, relative);
+            } else if (shouldCopyLauncherMetadataFile(normalized)) {
+                if (progress != null) progress.onProgress(3, "Reading launcher metadata: " + relative);
+                copyDocumentFileToLocal(context, entry.uri, new File(localDirectory, entry.displayName), entry.size, relative);
+            }
+        }
+    }
+
+    @NonNull
+    private static String normalizeMetadataPath(@NonNull String relative) {
+        String value = cleanRelativePath(relative);
+        if (value.equals(".minecraft")) return "";
+        if (value.startsWith(".minecraft/")) return value.substring(".minecraft/".length());
+        return value;
+    }
+
+    @NonNull
+    private static String cleanRelativePath(@NonNull String relative) {
+        String value = relative.replace('\\', '/').trim();
+        while (value.startsWith("/")) value = value.substring(1);
+        while (value.endsWith("/")) value = value.substring(0, value.length() - 1);
+        return value;
+    }
+
+    private static boolean shouldDescendForLauncherMetadata(@NonNull String relative) {
+        if (relative.isEmpty()) return true;
+
+        String[] parts = relative.split("/");
+        if (parts.length == 0) return true;
+
+        if ("instances".equals(parts[0])) {
+            if (parts.length <= 2) return true;
+            return parts.length == 3 && "game".equals(parts[2]);
+        }
+
+        if ("versions".equals(parts[0])) {
+            return parts.length <= 2;
+        }
+
+        // If the picked SAF root is the launcher folder, descend into its .minecraft folder.
+        return ".minecraft".equals(parts[0]);
+    }
+
+    private static boolean shouldCopyLauncherMetadataFile(@NonNull String relative) {
+        if (relative.equals("launcher_profiles.json")) return true;
+
+        String[] parts = relative.split("/");
+        if (parts.length == 3
+                && "instances".equals(parts[0])
+                && "instance.json".equals(parts[2])) {
+            return true;
+        }
+
+        if (parts.length == 3
+                && "instances".equals(parts[0])
+                && parts[2].startsWith("icon")) {
+            return true;
+        }
+
+        if (parts.length == 4
+                && "instances".equals(parts[0])
+                && "game".equals(parts[2])
+                && "options.txt".equals(parts[3])) {
+            return true;
+        }
+
+        return parts.length == 3
+                && "versions".equals(parts[0])
+                && parts[2].endsWith(".json");
     }
 
     @NonNull
@@ -254,7 +419,17 @@ public final class SafMinecraftMirror {
             @NonNull Uri parentDirectory,
             @NonNull String name
     ) throws Exception {
-        Uri existing = findChild(context, parentDirectory, name, true);
+        return ensureDirectory(context, parentDirectory, name, null);
+    }
+
+    @NonNull
+    private static Uri ensureDirectory(
+            @NonNull Context context,
+            @NonNull Uri parentDirectory,
+            @NonNull String name,
+            @Nullable HashMap<String, Uri> knownDirectories
+    ) throws Exception {
+        Uri existing = knownDirectories != null ? knownDirectories.get(name) : findChild(context, parentDirectory, name, true);
         if (existing != null) return existing;
 
         Uri created = DocumentsContract.createDocument(
@@ -264,6 +439,7 @@ public final class SafMinecraftMirror {
                 name
         );
         if (created == null) throw new IllegalStateException("Unable to create SAF directory: " + name);
+        if (knownDirectories != null) knownDirectories.put(name, created);
         return created;
     }
 
@@ -271,9 +447,33 @@ public final class SafMinecraftMirror {
             @NonNull Context context,
             @NonNull File source,
             @NonNull Uri parentDirectory,
-            @NonNull String name
+            @NonNull String name,
+            @NonNull String relativePath
     ) throws Exception {
-        Uri fileUri = findChild(context, parentDirectory, name, false);
+        copyLocalFileToDocument(context, source, parentDirectory, name, relativePath, null, null);
+    }
+
+    private static void copyLocalFileToDocument(
+            @NonNull Context context,
+            @NonNull File source,
+            @NonNull Uri parentDirectory,
+            @NonNull String name,
+            @NonNull String relativePath,
+            @Nullable HashMap<String, Uri> knownFiles,
+            @Nullable HashMap<String, Long> knownFileSizes
+    ) throws Exception {
+        Uri fileUri = knownFiles != null ? knownFiles.get(name) : findChild(context, parentDirectory, name, false);
+        if (fileUri != null) {
+            long knownSize = -1L;
+            if (knownFileSizes != null && knownFileSizes.containsKey(name)) {
+                Long size = knownFileSizes.get(name);
+                knownSize = size == null ? -1L : size;
+            }
+            if (shouldSkipExistingSafWrite(context, source, fileUri, knownSize, relativePath)) {
+                return;
+            }
+        }
+
         if (fileUri == null) {
             fileUri = DocumentsContract.createDocument(
                     context.getContentResolver(),
@@ -281,6 +481,10 @@ public final class SafMinecraftMirror {
                     "application/octet-stream",
                     name
             );
+            if (fileUri != null && knownFiles != null) {
+                knownFiles.put(name, fileUri);
+                if (knownFileSizes != null) knownFileSizes.put(name, -1L);
+            }
         }
         if (fileUri == null) throw new IllegalStateException("Unable to create SAF file: " + name);
 
@@ -296,15 +500,82 @@ public final class SafMinecraftMirror {
             @NonNull Uri source,
             @NonNull File target
     ) throws Exception {
+        copyDocumentFileToLocal(context, source, target, queryDocumentSize(context, source), target.getName());
+    }
+
+    private static void copyDocumentFileToLocal(
+            @NonNull Context context,
+            @NonNull Uri source,
+            @NonNull File target,
+            long sourceSize,
+            @NonNull String relativePath
+    ) throws Exception {
         File parent = target.getParentFile();
         if (parent != null && !parent.exists() && !parent.mkdirs()) {
             throw new IllegalStateException("Unable to create local mirror parent: " + parent.getAbsolutePath());
+        }
+
+        if (shouldSkipExistingLocalWrite(target, sourceSize, relativePath)) {
+            return;
         }
 
         try (InputStream input = context.getContentResolver().openInputStream(source);
              OutputStream output = new FileOutputStream(target, false)) {
             if (input == null) throw new IllegalStateException("Unable to open SAF input: " + source);
             copy(input, output);
+        }
+    }
+
+    private static boolean shouldSkipExistingSafWrite(
+            @NonNull Context context,
+            @NonNull File source,
+            @NonNull Uri existingFileUri,
+            long knownExistingSize,
+            @NonNull String relativePath
+    ) {
+        if (!isImmutableMinecraftPayload(relativePath)) return false;
+
+        long sourceSize = source.length();
+        long existingSize = knownExistingSize >= 0L ? knownExistingSize : queryDocumentSize(context, existingFileUri);
+        return sourceSize >= 0L && sourceSize == existingSize;
+    }
+
+    private static boolean shouldSkipExistingLocalWrite(
+            @NonNull File target,
+            long sourceSize,
+            @NonNull String relativePath
+    ) {
+        return target.isFile()
+                && sourceSize >= 0L
+                && target.length() == sourceSize
+                && isImmutableMinecraftPayload(relativePath);
+    }
+
+    private static boolean isImmutableMinecraftPayload(@NonNull String relativePath) {
+        String value = cleanRelativePath(relativePath).toLowerCase(Locale.ROOT);
+        if (value.equals(".minecraft")) return false;
+        if (value.startsWith(".minecraft/")) {
+            value = value.substring(".minecraft/".length());
+        }
+
+        return value.startsWith("assets/objects/")
+                || value.startsWith("libraries/")
+                || (value.startsWith("versions/") && value.endsWith(".jar"));
+    }
+
+    private static long queryDocumentSize(@NonNull Context context, @NonNull Uri documentUri) {
+        try (Cursor cursor = context.getContentResolver().query(
+                documentUri,
+                new String[]{DocumentsContract.Document.COLUMN_SIZE},
+                null,
+                null,
+                null
+        )) {
+            if (cursor == null || !cursor.moveToFirst()) return -1L;
+            return cursor.isNull(0) ? -1L : cursor.getLong(0);
+        } catch (Throwable throwable) {
+            Logging.i(TAG, "Unable to read SAF document size: " + throwable.getMessage());
+            return -1L;
         }
     }
 
@@ -340,7 +611,8 @@ public final class SafMinecraftMirror {
                 new String[]{
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_SIZE
                 },
                 null,
                 null,
@@ -351,11 +623,12 @@ public final class SafMinecraftMirror {
                 String documentId = cursor.getString(0);
                 String displayName = cursor.getString(1);
                 String mimeType = cursor.getString(2);
+                long size = cursor.isNull(3) ? -1L : cursor.getLong(3);
                 if (documentId == null || displayName == null) continue;
 
                 Uri documentUri = DocumentsContract.buildDocumentUriUsingTree(parentDirectory, documentId);
                 boolean directory = DocumentsContract.Document.MIME_TYPE_DIR.equals(mimeType);
-                result.add(new DocumentEntry(documentUri, displayName, directory));
+                result.add(new DocumentEntry(documentUri, displayName, directory, size));
             }
         }
 
@@ -389,11 +662,13 @@ public final class SafMinecraftMirror {
         final Uri uri;
         final String displayName;
         final boolean directory;
+        final long size;
 
-        DocumentEntry(@NonNull Uri uri, @NonNull String displayName, boolean directory) {
+        DocumentEntry(@NonNull Uri uri, @NonNull String displayName, boolean directory, long size) {
             this.uri = uri;
             this.displayName = displayName;
             this.directory = directory;
+            this.size = size;
         }
     }
 }

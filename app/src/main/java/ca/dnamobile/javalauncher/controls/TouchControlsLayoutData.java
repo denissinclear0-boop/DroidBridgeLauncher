@@ -19,13 +19,32 @@ import org.json.JSONObject;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Locale;
 
 /** Serializable JavaLauncher touch-control layout. */
 public final class TouchControlsLayoutData {
-    public int version = 1;
+    public static final String UNIT_DP = "dp";
+    public static final String UNIT_PX = "px";
+
+    private static final float DEFAULT_IMPORTED_SOURCE_WIDTH = 854f;
+    private static final float DEFAULT_IMPORTED_SOURCE_HEIGHT = 480f;
+
+    public int version = 4;
     @NonNull public String name = "Touch Controls";
     /** Pojav/Zalith/Mojo dynamic formulas use px(...) / 100 * preferredScale. */
     public float preferredScale = 100f;
+
+    /**
+     * Unit used by x/y/width/height in every TouchControlData entry.
+     * - dp: JavaLauncher layout units, converted through Android density.
+     * - px: imported/source-canvas pixels, scaled from sourceWidth/sourceHeight.
+     */
+    @NonNull public String coordinateUnit = UNIT_DP;
+
+    /** Source canvas used when coordinateUnit == px. 0 means use the current screen. */
+    public float sourceWidth = 0f;
+    public float sourceHeight = 0f;
+
     @NonNull public final List<TouchControlData> controls = new ArrayList<>();
 
     @NonNull
@@ -35,6 +54,9 @@ public final class TouchControlsLayoutData {
         root.put("version", version);
         root.put("name", name);
         root.put("preferredScale", preferredScale);
+        root.put("coordinateUnit", normalizeCoordinateUnit(coordinateUnit));
+        if (sourceWidth > 0f) root.put("sourceWidth", sourceWidth);
+        if (sourceHeight > 0f) root.put("sourceHeight", sourceHeight);
         JSONArray array = new JSONArray();
         for (TouchControlData control : controls) {
             array.put(control.toJson());
@@ -50,6 +72,9 @@ public final class TouchControlsLayoutData {
             data.version = root.optInt("version", 1);
             data.name = root.optString("name", "Touch Controls");
             data.preferredScale = (float) root.optDouble("preferredScale", root.optDouble("scaledAt", 100d));
+            boolean hasExplicitUnit = hasCoordinateUnit(root);
+            data.coordinateUnit = readCoordinateUnit(root, UNIT_DP);
+            readSourceCanvas(root, data);
             JSONArray controls = root.optJSONArray("controls");
             if (controls != null) {
                 for (int i = 0; i < controls.length(); i++) {
@@ -57,6 +82,20 @@ public final class TouchControlsLayoutData {
                     if (object != null) data.controls.add(TouchControlData.fromJson(object));
                 }
             }
+            boolean legacyImportedCanvas = looksLikeImportedCanvasLayout(data);
+            if (legacyImportedCanvas && (!hasExplicitUnit || data.version < 3)) {
+                data.coordinateUnit = UNIT_PX;
+                inferPixelSourceCanvasIfNeeded(data, true);
+            } else if (!hasExplicitUnit && looksLikePixelAuthoredLayout(data)) {
+                data.coordinateUnit = UNIT_PX;
+                inferPixelSourceCanvasIfNeeded(data, true);
+            } else {
+                inferPixelSourceCanvasIfNeeded(data, false);
+            }
+            if (data.usesPixelCoordinates() && legacyImportedCanvas) {
+                data.version = Math.max(data.version, 3);
+            }
+            normalizeSuspiciousImportedSourceCanvas(data);
             return data;
         }
 
@@ -70,6 +109,9 @@ public final class TouchControlsLayoutData {
             TouchControlsLayoutData data = new TouchControlsLayoutData();
             data.name = root.optString("name", "Imported Controls");
             data.preferredScale = (float) root.optDouble("preferredScale", root.optDouble("scaledAt", 100d));
+            boolean hasExplicitUnit = hasCoordinateUnit(root);
+            data.coordinateUnit = readCoordinateUnit(root, hasSourceCanvas(root) ? UNIT_PX : UNIT_DP);
+            readSourceCanvas(root, data);
             JSONArray buttons = root.optJSONArray("buttons");
             if (buttons != null) {
                 for (int i = 0; i < buttons.length(); i++) {
@@ -77,6 +119,20 @@ public final class TouchControlsLayoutData {
                     if (object != null) data.controls.add(TouchControlData.fromJson(object));
                 }
             }
+            boolean legacyImportedCanvas = looksLikeImportedCanvasLayout(data);
+            if (legacyImportedCanvas && (!hasExplicitUnit || data.version < 3)) {
+                data.coordinateUnit = UNIT_PX;
+                inferPixelSourceCanvasIfNeeded(data, true);
+            } else if (!hasExplicitUnit && looksLikePixelAuthoredLayout(data)) {
+                data.coordinateUnit = UNIT_PX;
+                inferPixelSourceCanvasIfNeeded(data, true);
+            } else {
+                inferPixelSourceCanvasIfNeeded(data, false);
+            }
+            if (data.usesPixelCoordinates() && legacyImportedCanvas) {
+                data.version = Math.max(data.version, 3);
+            }
+            normalizeSuspiciousImportedSourceCanvas(data);
             return data;
         }
 
@@ -88,6 +144,9 @@ public final class TouchControlsLayoutData {
         TouchControlsLayoutData data = new TouchControlsLayoutData();
         data.name = root.optString("name", "Imported Pojav/Zalith Controls");
         data.preferredScale = (float) root.optDouble("scaledAt", root.optDouble("preferredScale", 100d));
+        data.coordinateUnit = UNIT_PX;
+        readSourceCanvas(root, data);
+
         JSONArray controls = root.optJSONArray("mControlDataList");
         if (controls != null) {
             for (int i = 0; i < controls.length(); i++) {
@@ -120,13 +179,228 @@ public final class TouchControlsLayoutData {
             }
         }
 
+        // Old default_touch.json files usually store Android logical layout units
+        // from a 1920x1080-class phone, which is about an 854x480 canvas at xxhdpi.
+        // Use that as the fallback, and grow only when the coordinates prove it must.
+        inferPixelSourceCanvasIfNeeded(data, true);
+        normalizeSuspiciousImportedSourceCanvas(data);
         return data;
+    }
+
+    public boolean usesPixelCoordinates() {
+        return UNIT_PX.equals(normalizeCoordinateUnit(coordinateUnit));
+    }
+
+    public float resolvedSourceWidth(float fallback) {
+        return sourceWidth > 0f ? sourceWidth : Math.max(1f, fallback);
+    }
+
+    public float resolvedSourceHeight(float fallback) {
+        return sourceHeight > 0f ? sourceHeight : Math.max(1f, fallback);
+    }
+
+    @NonNull
+    private static String readCoordinateUnit(@NonNull JSONObject root, @NonNull String fallback) {
+        String value = firstString(root,
+                "coordinateUnit",
+                "coordinate_unit",
+                "layoutUnit",
+                "layout_unit",
+                "units",
+                "unit"
+        );
+        if (value.trim().isEmpty()) return normalizeCoordinateUnit(fallback);
+        return normalizeCoordinateUnit(value);
+    }
+
+    private static boolean hasCoordinateUnit(@NonNull JSONObject root) {
+        return root.has("coordinateUnit")
+                || root.has("coordinate_unit")
+                || root.has("layoutUnit")
+                || root.has("layout_unit")
+                || root.has("units")
+                || root.has("unit");
+    }
+
+    @NonNull
+    private static String normalizeCoordinateUnit(@NonNull String value) {
+        String normalized = value.trim().toLowerCase(Locale.ROOT);
+        if ("pixel".equals(normalized) || "pixels".equals(normalized) || "px".equals(normalized)) return UNIT_PX;
+        return UNIT_DP;
+    }
+
+    private static void readSourceCanvas(@NonNull JSONObject root, @NonNull TouchControlsLayoutData data) {
+        data.sourceWidth = firstPositiveFloat(root,
+                "sourceWidth",
+                "source_width",
+                "baseWidth",
+                "base_width",
+                "canvasWidth",
+                "canvas_width",
+                "layoutWidth",
+                "layout_width",
+                "screenWidth",
+                "screen_width",
+                "displayWidth",
+                "display_width",
+                "deviceWidth",
+                "device_width",
+                "physicalWidth",
+                "physical_width",
+                "width"
+        );
+        data.sourceHeight = firstPositiveFloat(root,
+                "sourceHeight",
+                "source_height",
+                "baseHeight",
+                "base_height",
+                "canvasHeight",
+                "canvas_height",
+                "layoutHeight",
+                "layout_height",
+                "screenHeight",
+                "screen_height",
+                "displayHeight",
+                "display_height",
+                "deviceHeight",
+                "device_height",
+                "physicalHeight",
+                "physical_height",
+                "height"
+        );
+    }
+
+    private static boolean hasSourceCanvas(@NonNull JSONObject root) {
+        return firstPositiveFloat(root,
+                "sourceWidth", "source_width", "baseWidth", "base_width", "canvasWidth", "canvas_width",
+                "layoutWidth", "layout_width", "screenWidth", "screen_width", "displayWidth", "display_width",
+                "deviceWidth", "device_width", "physicalWidth", "physical_width", "width"
+        ) > 0f && firstPositiveFloat(root,
+                "sourceHeight", "source_height", "baseHeight", "base_height", "canvasHeight", "canvas_height",
+                "layoutHeight", "layout_height", "screenHeight", "screen_height", "displayHeight", "display_height",
+                "deviceHeight", "device_height", "physicalHeight", "physical_height", "height"
+        ) > 0f;
+    }
+
+    private static float firstPositiveFloat(@NonNull JSONObject root, @NonNull String... keys) {
+        for (String key : keys) {
+            if (!root.has(key) || root.isNull(key)) continue;
+            double value = root.optDouble(key, 0d);
+            if (value > 0d && !Double.isNaN(value) && !Double.isInfinite(value)) return (float) value;
+        }
+        return 0f;
+    }
+
+    @NonNull
+    private static String firstString(@NonNull JSONObject root, @NonNull String... keys) {
+        for (String key : keys) {
+            if (!root.has(key) || root.isNull(key)) continue;
+            String value = root.optString(key, "");
+            if (value != null && !value.trim().isEmpty()) return value.trim();
+        }
+        return "";
+    }
+
+    private static boolean looksLikePixelAuthoredLayout(@NonNull TouchControlsLayoutData data) {
+        float maxRight = 0f;
+        float maxBottom = 0f;
+        float maxWidth = 0f;
+        float maxHeight = 0f;
+
+        for (TouchControlData control : data.controls) {
+            maxWidth = Math.max(maxWidth, control.width);
+            maxHeight = Math.max(maxHeight, control.height);
+            if (control.rawX == null) maxRight = Math.max(maxRight, control.x + Math.max(1f, control.width));
+            if (control.rawY == null) maxBottom = Math.max(maxBottom, control.y + Math.max(1f, control.height));
+        }
+
+        return maxRight > 1000f
+                || maxBottom > 700f
+                || maxWidth > 260f
+                || maxHeight > 180f;
+    }
+
+    private static boolean looksLikeImportedCanvasLayout(@NonNull TouchControlsLayoutData data) {
+        String name = data.name == null ? "" : data.name.trim().toLowerCase(Locale.ROOT);
+        boolean importedName = name.contains("pojav")
+                || name.contains("zalith")
+                || name.contains("mojo")
+                || name.contains("amethyst");
+        if (!importedName) return false;
+
+        float maxRight = 0f;
+        float maxBottom = 0f;
+        for (TouchControlData control : data.controls) {
+            if (control.rawX == null) maxRight = Math.max(maxRight, control.x + Math.max(1f, control.width));
+            if (control.rawY == null) maxBottom = Math.max(maxBottom, control.y + Math.max(1f, control.height));
+        }
+
+        // This catches the already-converted JavaLauncher JSON you pasted: right edge
+        // around 833 and bottom edge around 407. Those values are not normal modern
+        // Android pixels; they are a source canvas that must be scaled to the current view.
+        return maxRight >= 500f || maxBottom >= 250f;
+    }
+
+    private static void normalizeSuspiciousImportedSourceCanvas(@NonNull TouchControlsLayoutData data) {
+        if (!data.usesPixelCoordinates() || !looksLikeImportedCanvasLayout(data)) return;
+
+        float maxRight = 0f;
+        float maxBottom = 0f;
+        for (TouchControlData control : data.controls) {
+            if (control.rawX == null) maxRight = Math.max(maxRight, control.x + Math.max(1f, control.width));
+            if (control.rawY == null) maxBottom = Math.max(maxBottom, control.y + Math.max(1f, control.height));
+        }
+
+        if (maxRight > 1f && maxRight <= 960f && data.sourceWidth >= 1000f) {
+            data.sourceWidth = inferCanvasAxis(maxRight, DEFAULT_IMPORTED_SOURCE_WIDTH, true, true);
+        }
+        if (maxBottom > 1f && maxBottom <= 540f && data.sourceHeight >= 700f) {
+            data.sourceHeight = inferCanvasAxis(maxBottom, DEFAULT_IMPORTED_SOURCE_HEIGHT, true, false);
+        }
+    }
+
+    private static void inferPixelSourceCanvasIfNeeded(@NonNull TouchControlsLayoutData data, boolean importedPojavLike) {
+        if (!data.usesPixelCoordinates()) return;
+
+        float maxRight = 0f;
+        float maxBottom = 0f;
+        for (TouchControlData control : data.controls) {
+            if (control.rawX == null) maxRight = Math.max(maxRight, control.x + Math.max(1f, control.width));
+            if (control.rawY == null) maxBottom = Math.max(maxBottom, control.y + Math.max(1f, control.height));
+        }
+
+        if (data.sourceWidth <= 0f) {
+            data.sourceWidth = inferCanvasAxis(maxRight, DEFAULT_IMPORTED_SOURCE_WIDTH, importedPojavLike, true);
+        }
+        if (data.sourceHeight <= 0f) {
+            data.sourceHeight = inferCanvasAxis(maxBottom, DEFAULT_IMPORTED_SOURCE_HEIGHT, importedPojavLike, false);
+        }
+    }
+
+    private static float inferCanvasAxis(float maxExtent, float fallback, boolean preferFallback, boolean horizontal) {
+        if (maxExtent <= 1f) return preferFallback ? fallback : 0f;
+
+        // If this was a legacy Pojav/Zalith style layout and the file does not say
+        // otherwise, use the common logical canvas for a 1920x1080-class xxhdpi phone
+        // (about 854x480). If coordinates prove a larger source, grow to the nearest
+        // common canvas size instead.
+        if (preferFallback && maxExtent <= fallback) return fallback;
+
+        float padded = maxExtent + 16f;
+        float[] common = horizontal
+                ? new float[]{720f, 854f, 960f, 1024f, 1280f, 1366f, 1440f, 1600f, 1920f, 2160f, 2340f, 2400f, 2560f, 2800f, 3200f, 3840f}
+                : new float[]{480f, 540f, 600f, 720f, 768f, 800f, 900f, 1080f, 1200f, 1440f, 1600f, 1800f, 2160f};
+        for (float candidate : common) {
+            if (candidate >= padded) return candidate;
+        }
+        return Math.max(padded, fallback);
     }
 
     @NonNull
     public static TouchControlsLayoutData defaultLayout() {
         TouchControlsLayoutData data = new TouchControlsLayoutData();
         data.name = "Default Touch Controls";
+        data.coordinateUnit = UNIT_DP;
 
         // Defaults use dynamic formulas so they stay sane on phones, tablets, and
         // different display densities. Width/height are JavaLauncher layout units;
@@ -216,4 +490,5 @@ public final class TouchControlsLayoutData {
         data.controls.add(mouse);
 
         return data;
-    }}
+    }
+}

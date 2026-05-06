@@ -812,6 +812,7 @@ public final class LauncherSettingsActivity extends AppCompatActivity {
         refreshControllerSettingsValues();
     }
 
+
     private void setupHardwareMouseDpiScaleSettings() {
         if (binding == null || binding.layoutControllerSettings == null) return;
         if (binding.layoutControllerSettings.findViewWithTag("hardware_mouse_dpi_scale") != null) return;
@@ -902,6 +903,7 @@ public final class LauncherSettingsActivity extends AppCompatActivity {
             updateTouchControlsSwitchText(isChecked);
         });
 
+        updateMinecraftTouchGestureSettingsUi();
         updateHardwareMouseDpiScaleUi(GamepadMappingStore.get(this).getHardwareMouseDpiScale());
 
         boolean forceSdl = LauncherPreferences.isForceSdlControllerBridge(this);
@@ -912,6 +914,46 @@ public final class LauncherSettingsActivity extends AppCompatActivity {
             LauncherPreferences.setForceSdlControllerBridge(this, isChecked);
             updateForceSdlControllerBridgeSwitchText(isChecked);
         });
+    }
+
+
+    private void updateMinecraftTouchGestureSettingsUi() {
+        boolean gesturesEnabled = ControlsPreferences.isMinecraftTouchGesturesEnabled(this);
+        binding.switchMinecraftTouchGestures.setOnCheckedChangeListener(null);
+        binding.switchMinecraftTouchGestures.setChecked(gesturesEnabled);
+        updateMinecraftTouchGesturesSwitchText(gesturesEnabled);
+        binding.switchMinecraftTouchGestures.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            ControlsPreferences.setMinecraftTouchGesturesEnabled(this, isChecked);
+            updateMinecraftTouchGesturesSwitchText(isChecked);
+            updateDoubleTapToDropEnabledState(isChecked);
+        });
+
+        boolean doubleTapToDrop = ControlsPreferences.isDoubleTapToDropEnabled(this);
+        binding.switchDoubleTapToDrop.setOnCheckedChangeListener(null);
+        binding.switchDoubleTapToDrop.setChecked(doubleTapToDrop);
+        updateDoubleTapToDropSwitchText(doubleTapToDrop);
+        updateDoubleTapToDropEnabledState(gesturesEnabled);
+        binding.switchDoubleTapToDrop.setOnCheckedChangeListener((buttonView, isChecked) -> {
+            ControlsPreferences.setDoubleTapToDropEnabled(this, isChecked);
+            updateDoubleTapToDropSwitchText(isChecked);
+        });
+    }
+
+    private void updateMinecraftTouchGesturesSwitchText(boolean enabled) {
+        binding.switchMinecraftTouchGestures.setText(enabled
+                ? R.string.controller_minecraft_touch_gestures_on
+                : R.string.controller_minecraft_touch_gestures_off);
+    }
+
+    private void updateDoubleTapToDropSwitchText(boolean enabled) {
+        binding.switchDoubleTapToDrop.setText(enabled
+                ? R.string.controller_double_tap_to_drop_on
+                : R.string.controller_double_tap_to_drop_off);
+    }
+
+    private void updateDoubleTapToDropEnabledState(boolean gesturesEnabled) {
+        binding.switchDoubleTapToDrop.setEnabled(gesturesEnabled);
+        binding.textDoubleTapToDropSummary.setAlpha(gesturesEnabled ? 1.0f : 0.55f);
     }
 
     private void updateHardwareMouseDpiScaleUi(int percent) {

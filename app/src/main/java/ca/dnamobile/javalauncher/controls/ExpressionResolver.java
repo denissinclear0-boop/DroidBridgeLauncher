@@ -31,7 +31,7 @@ final class ExpressionResolver {
     }
 
     static float resolve(@Nullable String input, float fallback, int screenWidth, int screenHeight, float controlWidth, float controlHeight) {
-        return resolve(input, fallback, screenWidth, screenHeight, controlWidth, controlHeight, 1f, 100f);
+        return resolve(input, fallback, screenWidth, screenHeight, controlWidth, controlHeight, 1f, 100f, 1f);
     }
 
     static float resolve(
@@ -44,8 +44,23 @@ final class ExpressionResolver {
             float density,
             float preferredScale
     ) {
+        return resolve(input, fallback, screenWidth, screenHeight, controlWidth, controlHeight, density, preferredScale, density);
+    }
+
+    static float resolve(
+            @Nullable String input,
+            float fallback,
+            int screenWidth,
+            int screenHeight,
+            float controlWidth,
+            float controlHeight,
+            float density,
+            float preferredScale,
+            float pixelScale
+    ) {
         if (input == null || input.trim().isEmpty()) return fallback;
         float safeDensity = density > 0f ? density : 1f;
+        float safePixelScale = pixelScale > 0f ? pixelScale : safeDensity;
         float safePreferredScale = preferredScale > 0f ? preferredScale : 100f;
         float margin = 2f * safeDensity;
 
@@ -56,12 +71,14 @@ final class ExpressionResolver {
                 .replace("${height}", String.valueOf(controlHeight))
                 .replace("${preferred_scale}", String.valueOf(safePreferredScale))
                 .replace("${scale}", String.valueOf(safePreferredScale))
+                .replace("${density}", String.valueOf(safeDensity))
+                .replace("${pixel_scale}", String.valueOf(safePixelScale))
                 .replace("${margin}", String.valueOf(margin))
                 .replace("${right}", String.valueOf(Math.max(0f, screenWidth - controlWidth)))
                 .replace("${bottom}", String.valueOf(Math.max(0f, screenHeight - controlHeight)));
 
-        prepared = replacePixelFunction(prepared, PX_FUNCTION, safeDensity);
-        prepared = replacePixelFunction(prepared, DP_FUNCTION, safeDensity);
+        prepared = replaceUnitFunction(prepared, PX_FUNCTION, safePixelScale);
+        prepared = replaceUnitFunction(prepared, DP_FUNCTION, safeDensity);
 
         try {
             ExpressionResolver parser = new ExpressionResolver(prepared);
@@ -77,12 +94,12 @@ final class ExpressionResolver {
     }
 
     @NonNull
-    private static String replacePixelFunction(@NonNull String input, @NonNull Pattern pattern, float density) {
+    private static String replaceUnitFunction(@NonNull String input, @NonNull Pattern pattern, float scale) {
         Matcher matcher = pattern.matcher(input);
         StringBuffer out = new StringBuffer();
         while (matcher.find()) {
             float value = Float.parseFloat(matcher.group(1));
-            matcher.appendReplacement(out, Matcher.quoteReplacement(String.valueOf(value * density)));
+            matcher.appendReplacement(out, Matcher.quoteReplacement(String.valueOf(value * scale)));
         }
         matcher.appendTail(out);
         return out.toString();

@@ -229,8 +229,12 @@ public final class GameCursorOverlay extends View {
         float drawX = CallbackBridge.mouseX * rootWidth / bridgeWidth;
         float drawY = CallbackBridge.mouseY * rootHeight / bridgeHeight;
 
-        drawX = clamp(drawX, 0f, rootWidth - cursorSize);
-        drawY = clamp(drawY, 0f, rootHeight - cursorSize);
+        // The cursor path hotspot is the top-left arrow tip. Do not clamp the
+        // whole 42dp drawable inside the screen, because that makes the pointer
+        // look like it cannot reach the right/bottom edge. Let the drawable hang
+        // off-screen like a desktop cursor and only clamp the hotspot itself.
+        drawX = clamp(drawX, 0f, Math.max(0f, rootWidth - 1f));
+        drawY = clamp(drawY, 0f, Math.max(0f, rootHeight - 1f));
 
         int left = Math.round(drawX);
         int top = Math.round(drawY);
@@ -268,17 +272,22 @@ public final class GameCursorOverlay extends View {
         int sources = device.getSources();
         if (isControllerLikeDevice(device, sources)) return false;
 
-        boolean hasMouseSource = (sources & android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE
-                || (sources & android.view.InputDevice.SOURCE_MOUSE_RELATIVE) == android.view.InputDevice.SOURCE_MOUSE_RELATIVE;
-        if (!hasMouseSource) return false;
+        boolean hasPointerSource = (sources & android.view.InputDevice.SOURCE_MOUSE) == android.view.InputDevice.SOURCE_MOUSE
+                || (sources & android.view.InputDevice.SOURCE_MOUSE_RELATIVE) == android.view.InputDevice.SOURCE_MOUSE_RELATIVE
+                || (sources & android.view.InputDevice.SOURCE_TOUCHPAD) == android.view.InputDevice.SOURCE_TOUCHPAD
+                || device.supportsSource(android.view.InputDevice.SOURCE_MOUSE)
+                || device.supportsSource(android.view.InputDevice.SOURCE_MOUSE_RELATIVE)
+                || device.supportsSource(android.view.InputDevice.SOURCE_TOUCHPAD);
+        if (!hasPointerSource) return false;
 
         String name = safeLower(device.getName());
         if (looksLikeControllerName(name) || looksLikeVirtualTouchName(name)) return false;
 
-        // isExternal filters out Android's built-in/virtual pointer helpers.
-        // Some dongles are named as generic receivers, so accept either an
-        // external device or a strongly mouse-like name.
-        return device.isExternal() || looksLikeMouseName(name);
+        // Bluetooth mice and keyboard-touchpads can report generic names or bad
+        // isExternal() metadata. If Android exposes a mouse/touchpad source and
+        // the device is not a controller/virtual touch helper, treat it as a real
+        // pointer so the launcher software cursor hides correctly.
+        return true;
     }
 
     private static boolean isControllerLikeDevice(@NonNull android.view.InputDevice device, int sources) {
@@ -315,8 +324,6 @@ public final class GameCursorOverlay extends View {
 
     private static boolean looksLikeVirtualTouchName(@NonNull String name) {
         return name.contains("virtual")
-                || name.contains("touch")
-                || name.contains("touchpad")
                 || name.contains("touchscreen")
                 || name.contains("touch mapping")
                 || name.contains("touchmapping")

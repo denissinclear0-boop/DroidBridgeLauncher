@@ -211,9 +211,18 @@ public enum GamepadAction {
         float height = Math.max(1f, CallbackBridge.windowHeight > 0
                 ? CallbackBridge.windowHeight : CallbackBridge.physicalHeight);
 
-        CallbackBridge.mouseX = clamp(CallbackBridge.mouseX + dx, 0f, width);
-        CallbackBridge.mouseY = clamp(CallbackBridge.mouseY + dy, 0f, height);
+        // GLFW window coordinates are zero-based. Clamping to width/height can
+        // land exactly outside the last valid pixel on old Minecraft GUIs, while
+        // clamping the drawable by its size made the visible cursor stop early.
+        // Keep the input hotspot inside 0..width-1 and 0..height-1.
+        CallbackBridge.setInputReady(true);
+        CallbackBridge.mouseX = clamp(CallbackBridge.mouseX + dx, 0f, maxCursorCoordinate(width));
+        CallbackBridge.mouseY = clamp(CallbackBridge.mouseY + dy, 0f, maxCursorCoordinate(height));
         CallbackBridge.sendCursorPos(CallbackBridge.mouseX, CallbackBridge.mouseY);
+    }
+
+    private static float maxCursorCoordinate(float size) {
+        return Math.max(0f, size - 1f);
     }
 
     private static float clamp(float value, float min, float max) {
