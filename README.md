@@ -1,221 +1,132 @@
 <p align="center">
-  <img src="docs/app_icon.png" alt="DroidBridge app icon" width="128" height="128">
+  <img src="docs/app_icon.png" alt="DroidBridge Launcher" width="128" height="128">
 </p>
 
 <h1 align="center">DroidBridge Launcher</h1>
 
 <p align="center">
-  An independent Android launcher framework for users who own Minecraft: Java Edition and want to run Java Edition on Android devices.
+  A Minecraft: Java Edition launcher for Android devices.
 </p>
 
 <p align="center">
   <strong>NOT AN OFFICIAL MINECRAFT PRODUCT.</strong><br>
-  <strong>NOT APPROVED BY OR ASSOCIATED WITH MOJANG, MICROSOFT, XBOX, OR THE POJAVLAUNCHER PROJECT.</strong>
+  <strong>NOT APPROVED AS AN OFFICIAL MINECRAFT PRODUCT, ENDORSED BY, SPONSORED BY, OR ASSOCIATED WITH MOJANG, MICROSOFT, XBOX, OR MINECRAFT.</strong>
 </p>
 
 ---
 
+## Important
+
+DroidBridge Launcher is an independent project by **DNA Mobile Applications**.
+
+The launcher is built for users who already own Minecraft: Java Edition and want to manage and launch their own local game installation on Android. DroidBridge Launcher does not include Minecraft game files, Minecraft assets, paid content, account tokens, or any other proprietary Mojang/Microsoft files.
+
+Minecraft, Mojang, Microsoft, Xbox, and related names, services, trademarks, and assets belong to their respective owners. Users are responsible for following the Minecraft EULA, Minecraft Usage Guidelines, Microsoft Services Agreement, and any other terms that apply to their account, game copy, device, mods, resource packs, servers, or third-party content.
+
+Other than any limited authentication or API access granted for Microsoft account sign-in, this project is not affiliated with, sponsored by, endorsed by, partnered with, or approved as an official Minecraft product by Mojang, Microsoft, Xbox, Minecraft, PojavLauncher, Boardwalk, Zalith Launcher, Amethyst, Fold Craft Launcher, or any other third-party launcher project.
+
 ## About
 
-DroidBridge Launcher is developed by **DNA Mobile Applications** as an independent Android launcher framework and compatibility project.
+DroidBridge Launcher is a launcher-side Android compatibility project. It focuses on giving users a cleaner way to manage Minecraft: Java Edition installations, versions, instances, runtime components, renderers, controls, mods, resource packs, shader packs, worlds, logs, and launcher settings on Android.
 
-This project is not affiliated with, endorsed by, sponsored by, reviewed by, or approved by Microsoft, Mojang, Xbox, Minecraft, PojavLauncher, Boardwalk, Amethyst, MojoLauncher, Zalith Launcher, Fold Craft Launcher, or any other third-party launcher project.
+The project may use, modify, adapt, or study open-source launcher work where the applicable license allows it. DroidBridge Launcher keeps third-party license obligations attached to the code they apply to, including notice preservation and source availability where required.
 
-Minecraft, Microsoft, Xbox, Mojang, and related names, services, trademarks, and assets are property of their respective owners.
+## Microsoft account sign-in
 
-Users are responsible for owning Minecraft: Java Edition and for complying with the Minecraft EULA, Minecraft Usage Guidelines, Microsoft Services Agreement, and any other applicable terms.
+DroidBridge Launcher may support Microsoft account sign-in through Microsoft identity services.
 
----
+Microsoft account sign-in or related Minecraft service/API access may require review, registration, allow-listing, or approval from Microsoft, Mojang, or their service teams before it is available in a production build. If that access has been granted, it applies only to the authentication or API access that was reviewed and allowed.
 
-## What this repository contains
+That limited authentication/API approval does not make DroidBridge Launcher an official Minecraft product, official launcher, Mojang partner, Microsoft partner, Xbox partner, or endorsed Minecraft service.
 
-This repository is intended to contain the public launcher-side framework for DroidBridge Launcher, including Android UI, settings, instance management, renderer configuration, input handling, legal screens, and compatibility scaffolding.
+Users must use their own Microsoft/Minecraft account and are responsible for following the terms that apply to that account.
 
-Depending on the branch, release, or build configuration, this repository may include experimental or in-progress launcher components.
+## Installation and game setup
 
-The public project focuses on:
+DroidBridge Launcher is intended to help users install and manage their own Minecraft: Java Edition game files on their device after they have signed in or otherwise provided access allowed by the official services and terms.
 
-- Android-native launcher UI and instance management.
-- Local launcher settings and instance state management.
-- Version metadata models and compatibility structures.
-- Java runtime and LWJGL integration scaffolding for Android.
-- Renderer/runtime compatibility work for Android devices.
-- Touch, input, surface, and lifecycle bridge work required to run Java games on Android.
-- Mod, modpack, resource pack, shader pack, and world management UI/framework code.
-- Legal, privacy, and open-source notice screens.
+Code written by DNA Mobile Applications for user-facing setup, game installation guidance, account sign-in, launcher flow, or related screens is written to respect the GNU license obligations of any GNU-licensed code it partially uses, modifies, or depends on. Where a file or feature is based on GPL/LGPL-covered code, DroidBridge Launcher treats the covered portions and modifications as remaining under the applicable GNU license terms.
 
----
+DroidBridge Launcher does not grant a Minecraft license, bypass Minecraft ownership checks, distribute Minecraft, or replace the need for a legitimate copy of Minecraft: Java Edition.
 
-## What this repository must not contain
+## Language and translation support
 
-Do **not** commit private or user-specific configuration.
+Translations are welcome.
 
-The public source tree must not include:
+If translation files are included in this repository, contributors should keep wording clear, accurate, and respectful of the legal notices above. Avoid implying official Mojang, Microsoft, Xbox, Minecraft, or third-party launcher approval in any language.
 
-- private authentication credentials;
-- production signing keys or keystores;
-- private API keys;
-- user account tokens or session data;
-- local machine paths such as Android SDK paths;
-- bundled Minecraft game files, assets, libraries, or proprietary content;
-- private endpoint details;
-- private production service implementation code; or
-- private release-only launcher implementation classes.
+## Build instructions
 
-Keep private configuration in local files that are ignored by Git.
+> This section is for developers who want to build the project locally.
 
-Recommended private files:
+### Requirements
 
-```text
-local.properties
-keystore.properties
-signing.properties
-secrets.properties
-.env
-*.jks
-*.keystore
-```
+- Android Studio
+- Android SDK with the project-supported minimum and target API levels
+- JDK required by the current Gradle/Android plugin setup
+- Git
 
----
-
-## Microsoft account sign-in clarification
-
-Some private or production builds of DroidBridge Launcher may allow users to sign in with a Microsoft account through Microsoft identity services.
-
-A working Microsoft sign-in flow, registered application, redirect URI, or consent screen means only that the launcher uses Microsoft identity services for authentication where that feature is available. It does **not** mean Mojang, Microsoft, Xbox, or Minecraft has approved, endorsed, sponsored, reviewed, or partnered with this launcher.
-
-This public source release does not provide production account-service configuration, private token exchange details, app secrets, private endpoint details, or release-only authentication implementation code.
-
----
-
-## Open-source lineage and credits
-
-DroidBridge Launcher is a DNA Mobile Applications project, but Android Minecraft: Java Edition launchers have a long open-source history.
-
-This repository contains or may contain code, compatibility ideas, runtime integration patterns, API bridge behavior, input/surface handling, or implementation details that are copied from, modified from, derived from, studied from, or inspired by other open-source projects.
-
-Where code is copied, modified, ported, or derived from another project, the original license and notices must be preserved.
-
-See [`OPEN_SOURCE_NOTICES.md`](OPEN_SOURCE_NOTICES.md) for project notices and attribution details.
-
-### PojavLauncher
-
-- Repository: <https://github.com/PojavLauncherTeam/PojavLauncher>
-- License: GNU Lesser General Public License v3.0, unless a file says otherwise.
-- Relationship: DroidBridge Launcher may include or adapt launcher-side compatibility interfaces, input/surface bridge ideas, runtime integration patterns, and related Android launcher logic from PojavLauncher.
-
-Any PojavLauncher-derived files must remain under the applicable PojavLauncher license terms. Do not remove source attribution or license notices.
-
-### Boardwalk
-
-- Repository: <https://github.com/zhuowei/Boardwalk>
-- License: Apache License 2.0, unless a file says otherwise.
-- Relationship: Boardwalk is credited for early Android Minecraft: Java Edition launcher work and historical launcher/runtime concepts that influenced later Android Java launcher projects.
-
-Any Boardwalk-derived files must preserve the Apache License 2.0 notice requirements.
-
----
-
-## License and source availability
-
-This repository is a mixed-origin source tree.
-
-Files written entirely by DNA Mobile Applications may be licensed separately by DNA Mobile Applications.
-
-Files copied from, modified from, derived from, or based on third-party projects remain subject to their original licenses and notices. That includes files derived from PojavLauncher, Boardwalk, LWJGL, Mesa, GL4ES, Android platform libraries, and other third-party components.
-
-If this repository includes PojavLauncher-derived code, the applicable LGPL-covered source code and modifications must remain available under the LGPL terms.
-
-Before distributing APKs or other binaries, make sure the app includes or links to:
-
-- open-source notices;
-- required license texts;
-- source-code links required by LGPL/GPL or other applicable licenses;
-- the app privacy policy;
-- the app terms/legal notice screen; and
-- any notices required by files copied or modified from third-party projects.
-
-This README is not legal advice. Review the relevant licenses before commercial distribution or app-store publication.
-
----
-
-## Privacy
-
-DroidBridge Launcher is designed to avoid operating a DNA Mobile Applications account server.
-
-Launcher settings, logs, worlds, mods, resource packs, shader packs, and launcher files are intended to remain local to the user’s device unless the user chooses to share, export, upload, or send them through another service.
-
-See `PRIVACY_POLICY.md` for the full privacy policy.
-
----
-
-## App icon in this README
-
-The icon at the top of this README expects this file to exist:
-
-```text
-docs/app_icon.png
-```
-
-Before publishing, place the PNG app icon at that path so GitHub displays it correctly.
-
----
-
-## Building
-
-Open the project in Android Studio and let Gradle sync.
-
-Typical local build commands:
+### Build steps
 
 ```bash
+git clone https://github.com/DNAMobileApplications/DroidBridgeLauncher.git
+cd DroidBridgeLauncher
 ./gradlew assembleDebug
-./gradlew assembleRelease
 ```
 
 On Windows:
 
 ```bat
+git clone https://github.com/DNAMobileApplications/DroidBridgeLauncher.git
+cd DroidBridgeLauncher
 gradlew.bat assembleDebug
-gradlew.bat assembleRelease
 ```
 
-Release builds should be signed with the correct production keystore and should not include debug-only application IDs, private API keys, local paths, or private development configuration.
+Release builds should be signed with your own release keystore. Do not publish builds containing private credentials, signing material, API keys, local machine paths, account tokens, or debug-only configuration.
 
----
+## License
 
-## Google Play and store publication checklist
+DroidBridge Launcher is a mixed-origin source tree.
 
-Before publishing on Google Play or another app store:
+Files written entirely by **DNA Mobile Applications** are owned by DNA Mobile Applications unless a file header, license file, or notice says otherwise.
 
-- Make sure the app name, icon, screenshots, and description do not imply official Microsoft, Mojang, Xbox, or Minecraft endorsement.
-- Include a publicly accessible privacy policy URL.
-- Make in-app privacy, legal notices, and open-source notices easy to find.
-- Complete the Google Play Data safety form accurately.
-- Disclose any data accessed, collected, transmitted, or shared by the app and by third-party SDKs/libraries.
-- Include open-source notices and license texts.
-- Provide source-code links required by LGPL/GPL or other applicable licenses.
-- Review third-party APIs, SDKs, and content services used by the app.
+Files copied from, modified from, derived from, or based on third-party projects remain under their original license terms. This includes any code or modifications covered by GPL, LGPL, Apache-2.0, MIT, BSD, or other open-source licenses.
 
----
+If this repository includes GPL/LGPL-covered code, the corresponding covered source code and DroidBridge Launcher modifications to that covered code must remain available under the applicable GNU license terms.
+
+This README is not legal advice. Review the actual license files and third-party notices before redistributing APKs, publishing modified builds, or using this project commercially.
+
+## Open source libraries and licenses
+
+DroidBridge Launcher may use or reference open-source projects and libraries, including but not limited to:
+
+| Project / Library | License | Link |
+| --- | --- | --- |
+| PojavLauncher | LGPL-3.0 unless otherwise stated by the upstream project | https://github.com/PojavLauncherTeam/PojavLauncher |
+| Boardwalk | Apache-2.0 unless otherwise stated by the upstream project | https://github.com/zhuowei/Boardwalk |
+| LWJGL | BSD-style license used by the LWJGL project | https://www.lwjgl.org |
+| Mesa | MIT license used by Mesa components | https://www.mesa3d.org |
+| GL4ES | MIT license unless otherwise stated by the upstream project | https://github.com/ptitSeb/gl4es |
+| AndroidX / Android platform libraries | Apache-2.0 unless otherwise stated | https://developer.android.com |
+
+See `OPEN_SOURCE_NOTICES.md`, `LICENSE`, and any license files included with third-party components for the full notices that apply to this repository.
+
+## Privacy
+
+DroidBridge Launcher is designed around local launcher data.
+
+Launcher settings, logs, worlds, mods, resource packs, shader packs, instances, and related files are intended to stay on the user's device unless the user chooses to export, share, upload, back up, or send them through another app or service.
+
+See `PRIVACY_POLICY.md` for the full privacy policy.
 
 ## Contributing
 
-Contributions are welcome if they respect the project’s legal and technical boundaries.
+Contributions are welcome when they respect the project's code style, legal notices, and license requirements.
 
-Do not submit code copied from another launcher or project unless the license permits it and attribution is preserved.
+Do not submit copied code unless the license allows it and the original attribution is preserved. If a contribution is based on third-party code, make that clear in the pull request and keep the required notices with the affected files.
 
-Pull requests that include third-party-derived code should clearly identify:
+## Disclaimer
 
-- the source project;
-- the original license;
-- the original file or commit if known;
-- the files changed in this project; and
-- any required notices.
+DroidBridge Launcher is not an official Minecraft product. Any Microsoft, Mojang, or Minecraft service/API access granted for account sign-in is limited to that reviewed authentication/API use only. It does not make DroidBridge Launcher an official launcher, official Minecraft product, endorsed service, or partner of Mojang, Microsoft, Xbox, or Minecraft.
 
----
-
-## Legal disclaimer
-
-This project is not an official Minecraft product and is not approved by or associated with Mojang, Microsoft, Xbox, or Minecraft.
-
-This README is not legal advice. Before commercial distribution or app-store publication, review all third-party licenses, Microsoft/Minecraft terms, Google Play policies, and any store-specific requirements that apply to your release.
+This project does not include Minecraft, does not sell Minecraft, and does not provide any rights to Minecraft or other third-party content.
