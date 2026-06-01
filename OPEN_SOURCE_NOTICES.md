@@ -1,3 +1,4 @@
+Hola yo hablo español y no ingles mi objetivo iba a ser mejorar este launcher pero resulta que tengo un movil y no una PC asi que en un futuro cuando tenga una PC yo a Gackear totalmente este launcher a mi antojo y el creador no me va a poder decir nada
 # Open Source Notices
 
 This file tracks open-source attribution for DroidBridge Launcher.
