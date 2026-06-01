@@ -17,13 +17,13 @@
 
 ## About
 
-DroidBridge Launcher is developed by **DNA Mobile Applications** as an independent Android launcher framework and compatibility project.
+DroidBridge Launcher is developed by **One person** as an independent Android launcher framework and compatibility project.
 
-This project is not affiliated with, endorsed by, sponsored by, reviewed by, or approved by Microsoft, Mojang, Xbox, Minecraft, PojavLauncher, Boardwalk, Amethyst, MojoLauncher, Zalith Launcher, Fold Craft Launcher, or any other third-party launcher project.
+This project is  not affiliated with, endorsed by, sponsored by, reviewed by, or approved by Microsoft, Mojang, Xbox, Minecraft,pero si ytiliza partes de PojavLauncher, Boardwalk, Amethyst, MojoLauncher, Zalith Launcher, Fold Craft Launcher, or any other third-party launcher project.
 
 Minecraft, Microsoft, Xbox, Mojang, and related names, services, trademarks, and assets are property of their respective owners.
 
-Users are responsible for owning Minecraft: Java Edition and for complying with the Minecraft EULA, Minecraft Usage Guidelines, Microsoft Services Agreement, and any other applicable terms.
+No kecesitas tener minecraft para jugar esta version Users are responsible for owning Minecraft: Java Edition and for complying with the Minecraft EULA, Minecraft Usage Guidelines, Microsoft Services Agreement, and any other applicable terms.
 
 ---
 
@@ -78,13 +78,7 @@ secrets.properties
 
 ---
 
-## Microsoft account sign-in clarification
-
-Some private or production builds of DroidBridge Launcher may allow users to sign in with a Microsoft account through Microsoft identity services.
-
-A working Microsoft sign-in flow, registered application, redirect URI, or consent screen means only that the launcher uses Microsoft identity services for authentication where that feature is available. It does **not** mean Mojang, Microsoft, Xbox, or Minecraft has approved, endorsed, sponsored, reviewed, or partnered with this launcher.
-
-This public source release does not provide production account-service configuration, private token exchange details, app secrets, private endpoint details, or release-only authentication implementation code.
+Totalmente eliminado el inicio de sesion en la cuenta de microsoft y no lo voy a quitar,cualquier mensaje que me envien sera archivado ya que no leo a nadie 
 
 ---
 
