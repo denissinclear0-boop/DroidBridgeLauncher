@@ -1,4 +1,4 @@
-name: Build APK with MTW
+name: Build APK - DroidBridgeLauncher
 
 on:
   push:
@@ -17,11 +17,6 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Checkout MTW Repository
-        run: |
-          mkdir -p modules
-          git clone https://github.com/denissinclear0-boop/MTW.git modules/mtw
-      
       - name: Set up JDK 17
         uses: actions/setup-java@v3
         with:
@@ -33,12 +28,10 @@ jobs:
         uses: android-actions/setup-android@v2
         with:
           api-level: 34
-          ndk-version: 28.2.13676358
       
-      - name: Check and create settings.gradle
+      - name: Update settings.gradle (remove MTW)
         run: |
-          if [ ! -f "settings.gradle" ]; then
-            cat > settings.gradle << 'EOF'
+          cat > settings.gradle << 'EOF'
 pluginManagement {
     repositories {
         google()
@@ -56,31 +49,50 @@ dependencyResolutionManagement {
 rootProject.name = "DroidBridgeLauncher"
 include ':app'
 include ':methods_injector_agent'
-include ':mtw:ltw'
 EOF
-          else
-            if ! grep -q "include ':mtw:ltw'" settings.gradle; then
-              echo "include ':mtw:ltw'" >> settings.gradle
-            fi
-          fi
       
-      - name: Check and update app/build.gradle
+      - name: Update app/build.gradle (remove MTW dependency)
         run: |
-          if [ ! -f "app/build.gradle" ]; then
-            echo "app/build.gradle not found"
-          else
-            if ! grep -q "implementation project(':mtw:ltw')" app/build.gradle; then
-              # Insert before the last closing brace
-              sed -i '/^}/i\    implementation project('"'"':mtw:ltw'"'"')' app/build.gradle
-            fi
-          fi
+          cat > app/build.gradle << 'EOF'
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.example.droidbridgelauncher'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.example.droidbridgelauncher"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0-OfflineSupport"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+}
+
+dependencies {
+    implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'androidx.constraintlayout:constraintlayout:2.1.4'
+}
+EOF
       
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
       
       - name: Build Release APK
-        run: |
-          ./gradlew clean assembleRelease --stacktrace
+        run: ./gradlew clean assembleRelease --stacktrace
       
       - name: Find APK file
         id: find_apk
@@ -96,7 +108,7 @@ EOF
       - name: Upload APK as Artifact
         uses: actions/upload-artifact@v3
         with:
-          name: DroidBridgeLauncher-MTW
+          name: DroidBridgeLauncher-OfflineSupport
           path: ${{ steps.find_apk.outputs.APK_PATH }}
           retention-days: 30
       
@@ -105,18 +117,18 @@ EOF
         uses: softprops/action-gh-release@v1
         with:
           files: ${{ steps.find_apk.outputs.APK_PATH }}
-          tag_name: v${{ github.run_number }}-mtw-${{ github.run_id }}
-          name: "Build #${{ github.run_number }} - MTW Integration"
+          tag_name: v${{ github.run_number }}-offline-${{ github.run_id }}
+          name: "Build #${{ github.run_number }} - Offline Support"
           body: |
-            ✅ **APK compilado exitosamente con MTW integrado**
+            ✅ **APK compilado con soporte OFFLINE mejorado**
             
             📦 Archivo: `${{ steps.find_apk.outputs.APK_NAME }}`
             🔧 Commit: ${{ github.sha }}
             
-            **Características:**
-            - Integración completa de MTW (rendering layer optimizado)
-            - Compilado automáticamente desde GitHub Actions
-            - APK listo para instalar
+            **Cambios:**
+            - ✅ Soporte completo para cuentas OFFLINE
+            - ✅ Vista de skin habilitada para cuentas offline
+            - ✅ Launcher optimizado
             
             **Instalación:**
             1. Descarga el APK
@@ -125,15 +137,3 @@ EOF
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      
-      - name: Comment on PR
-        if: github.event_name == 'pull_request'
-        uses: actions/github-script@v6
-        with:
-          script: |
-            github.rest.issues.createComment({
-              issue_number: context.issue.number,
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: '✅ **APK compilado exitosamente con MTW**\n\n📥 Descárgalo en la sección de Artifacts arriba o en [Releases](https://github.com/${{ github.repository }}/releases)'
-            })
