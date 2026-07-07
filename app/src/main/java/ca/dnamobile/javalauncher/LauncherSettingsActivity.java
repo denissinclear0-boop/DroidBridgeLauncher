@@ -1,55 +1,38 @@
-    private void showOfflineAccountsDialog() {
-        // ✅ MODIFICADO: Ya NO requiere Microsoft login para acceder a cuentas offline
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setFillViewport(false);
+    private void updateAccountStatus(@Nullable AccountStore.Account account) {
+        boolean hasRememberedMicrosoft = accountStore != null && accountStore.hasStoredMicrosoftAccount();
+        boolean activeOffline = account != null && account.isOfflineAccount();
+        boolean activeMicrosoft = account != null && account.isMicrosoftAccount();
 
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(24);
-        root.setPadding(padding, dp(18), padding, dp(4));
-        scrollView.addView(root, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
-        ));
+        // ✅ MODIFICADO: Permite acceder a cuentas offline sin Microsoft login
+        binding.buttonSignIn.setVisibility(hasRememberedMicrosoft ? View.GONE : View.VISIBLE);
+        binding.buttonSignOut.setVisibility((hasRememberedMicrosoft || account != null) ? View.VISIBLE : View.GONE);
+        // ✅ CAMBIO: Permite manage offline accounts SIN requerir Microsoft login primero
+        binding.buttonManageOfflineAccounts.setVisibility(View.VISIBLE);
+        binding.buttonManageOfflineAccounts.setEnabled(true);
+        binding.buttonUseMicrosoftAccount.setVisibility(hasRememberedMicrosoft && activeOffline ? View.VISIBLE : View.GONE);
+        binding.buttonRefreshMicrosoftSkin.setVisibility(hasRememberedMicrosoft ? View.VISIBLE : View.GONE);
+        binding.buttonRefreshMicrosoftSkin.setEnabled(hasRememberedMicrosoft);
 
-        root.addView(buildDialogHeader(
-                R.drawable.ic_player_head_placeholder,
-                R.string.offline_accounts_title,
-                R.string.offline_accounts_dialog_summary
-        ));
-
-        TextView sectionTitle = new TextView(this);
-        sectionTitle.setText(R.string.offline_accounts_section_title);
-        sectionTitle.setTextAppearance(android.R.style.TextAppearance_Material_Medium);
-        sectionTitle.setTypeface(sectionTitle.getTypeface(), android.graphics.Typeface.BOLD);
-        LinearLayout.LayoutParams sectionParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        sectionParams.topMargin = dp(18);
-        root.addView(sectionTitle, sectionParams);
-
-        ArrayList<AccountStore.Account> accounts = accountStore != null ? accountStore.listOfflineAccounts() : new ArrayList<>();
-        if (accounts.isEmpty()) {
-            root.addView(buildEmptyOfflineAccountCard());
-        } else {
-            AccountStore.Account active = accountStore != null ? accountStore.load() : null;
-            for (AccountStore.Account offline : accounts) {
-                root.addView(buildOfflineAccountRow(offline, active));
-            }
+        if (activeOffline) {
+            String microsoftName = "Microsoft account";
+            AccountStore.Account remembered = accountStore != null ? accountStore.loadLastMicrosoftAccount() : null;
+            if (remembered != null) microsoftName = remembered.getBestDisplayName();
+            binding.textAccountStatus.setText(getString(R.string.status_offline_account_with_microsoft, account.getBestDisplayName(), microsoftName));
+            return;
         }
 
-        AlertDialog dialog = new AlertDialog.Builder(this)
-                .setView(scrollView)
-                .setNegativeButton(android.R.string.cancel, null)
-                .setPositiveButton(R.string.offline_account_add, null)
-                .create();
+        if (activeMicrosoft) {
+            binding.textAccountStatus.setText(getString(R.string.status_signed_in, account.getBestDisplayName()));
+            return;
+        }
 
-        dialog.setOnShowListener(dialogInterface -> dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {
-            dialog.dismiss();
-            showEditOfflineAccountDialog(null);
-        }));
-        offlineAccountsDialog = dialog;
-        dialog.setOnDismissListener(d -> { if (offlineAccountsDialog == dialog) offlineAccountsDialog = null; });
-        dialog.show();
+        if (hasRememberedMicrosoft) {
+            AccountStore.Account remembered = accountStore.loadLastMicrosoftAccount();
+            String name = remembered != null ? remembered.getBestDisplayName() : "Microsoft Player";
+            binding.textAccountStatus.setText(getString(R.string.status_microsoft_remembered, name));
+            return;
+        }
+
+        // ✅ NUEVO: Muestra opción para crear cuenta offline sin Microsoft
+        binding.textAccountStatus.setText(R.string.status_offline_available);
     }
