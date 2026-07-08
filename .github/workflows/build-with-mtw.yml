@@ -1,0 +1,70 @@
+name: Build APK with MTW Integration
+
+on:
+  push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    steps:
+      - uses: actions/checkout@v3
+      
+      - name: Checkout MTW
+        run: git clone https://github.com/denissinclear0-boop/MTW.git mtw-source
+      
+      - name: Set up JDK 17
+        uses: actions/setup-java@v3
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+          cache: gradle
+      
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v2
+      
+      - name: Create modules directory and copy MTW
+        run: |
+          mkdir -p modules
+          cp -r mtw-source modules/mtw
+      
+      - name: Update settings.gradle
+        run: |
+          if ! grep -q "include ':mtw:ltw'" settings.gradle 2>/dev/null; then
+            echo "include ':mtw:ltw'" >> settings.gradle
+          fi
+      
+      - name: Add MTW dependency to app/build.gradle
+        run: |
+          if ! grep -q "implementation project(':mtw:ltw')" app/build.gradle 2>/dev/null; then
+            sed -i "/dependencies {/a\    implementation project(':mtw:ltw')" app/build.gradle
+          fi
+      
+      - name: Grant execute permission for gradlew
+        run: chmod +x gradlew
+      
+      - name: Build APK
+        run: ./gradlew assembleRelease
+      
+      - name: Upload APK Artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: app-release
+          path: app/build/outputs/apk/release/
+      
+      - name: Create Release and Upload APK
+        if: success()
+        uses: softprops/action-gh-release@v1
+        with:
+          files: app/build/outputs/apk/release/*.apk
+          tag_name: v${{ github.run_number }}-mtw
+          name: "Build #${{ github.run_number }} with MTW"
+          body: "✅ APK compilado exitosamente con MTW integrado"
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
